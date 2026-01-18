@@ -158,33 +158,47 @@ cmake -DCMAKE_TOOLCHAIN_FILE=../toolchains/x86_64-w64-mingw32.cmake ..
 ## 项目结构
 
 ```
-mqtt-client/
-├── include/         # 公共头文件
-│   └── mqtt_client/ # 库头文件（用户需要包含的头文件）
-│       ├── library.h
-│       └── platform.h
-├── src/             # 源文件
-│   └── library.cpp
-├── demo/            # Demo程序
-├── scripts/          # 构建脚本
-├── toolchains/      # 交叉编译工具链文件
-├── docs/            # 文档
-├── CMakeLists.txt   # CMake配置
-└── build/           # 构建输出目录
+libmqtt-client/
+├── include/              # 公共头文件
+│   └── mqtt_client/      # 库头文件（用户需要包含的头文件）
+│       ├── embedded_mqtt_client.h
+│       ├── config/
+│       ├── connection/
+│       ├── message/
+│       ├── subscription/
+│       └── ...
+├── src/                  # 源文件
+│   ├── embedded_mqtt_client.cpp
+│   ├── adapter/
+│   ├── config/
+│   ├── connection/
+│   ├── message/
+│   └── ...
+├── scripts/              # 构建脚本
+│   ├── unix/            # Linux/macOS 脚本
+│   └── windows/          # Windows 脚本
+├── third_party/          # 第三方依赖（Git Submodule）
+│   └── wolfmqtt/        # wolfMQTT 库（通过 submodule 管理）
+├── toolchains/           # 交叉编译工具链文件
+├── docs/                 # 文档
+│   ├── README.md        # 文档索引
+│   ├── ARCHITECTURE.md   # 架构设计
+│   └── API_DESIGN.md    # API接口设计
+├── tests/                # 测试代码
+├── CMakeLists.txt        # CMake配置
+└── build/                # 构建输出目录（不提交）
 ```
 
 ### 使用库
 
-在代码中使用库时，包含头文件：
+在代码中使用库时，包含主头文件：
 
 ```cpp
-#include "mqtt_client/library.h"
-#include "mqtt_client/platform.h"  // 可选，用于平台检测
+#include "mqtt_client/embedded_mqtt_client.h"
 ```
 
 ## 更多信息
 
 - **文档索引**: 查看 [docs/README.md](docs/README.md) - 完整的文档目录和阅读指南
-- **详细构建说明**: 查看 [docs/BUILD.md](docs/BUILD.md) - 包含交叉编译、高级配置等
-- **详细依赖说明**: 查看 [docs/DEPENDENCIES.md](docs/DEPENDENCIES.md) - 包含故障排除、验证方法等
-- **架构设计方案**: 查看 [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md) - 嵌入式MQTT客户端架构设计
+- **架构设计方案**: 查看 [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md) - 嵌入式MQTT客户端架构设计（包含构建、依赖、配置等完整说明）
+- **API接口设计**: 查看 [docs/API_DESIGN.md](docs/API_DESIGN.md) - 完整的API接口清单和接口定义
