@@ -4,6 +4,3 @@
 [submodule "third_party/wolfmqtt"]
 	path = third_party/wolfmqtt
 	url = https://github.com/wolfSSL/wolfMQTT.git
-[submodule "/Users/richie696/Projects/workspace/libmqtt-client/third_party/wolfmqtt"]
-	path = /Users/richie696/Projects/workspace/libmqtt-client/third_party/wolfmqtt
-	url = https://github.com/wolfSSL/wolfMQTT.git

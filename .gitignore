@@ -5,6 +5,18 @@ cmake-build-*/
 third_party/*/build*/
 third_party/*/build-*/
 
+# Git Submodule 构建产物（wolfMQTT）
+# 注意：Submodule 目录中的实际文件由 submodule 仓库管理
+# 主仓库只提交 submodule 引用（在 .gitmodules 中），不提交 submodule 内容
+# 用户克隆项目后，需要运行: git submodule update --init --recursive
+# 或者运行初始化脚本: ./scripts/unix/init.sh 或 .\scripts\windows\init.ps1
+#
+# 排除 submodule 目录中的构建产物（Git 会自动处理 submodule 本身）
+third_party/wolfmqtt/build*/
+third_party/wolfmqtt/build-*/
+third_party/wolfmqtt/install/
+third_party/wolfmqtt/.libs/
+
 # CMake生成的文件
 CMakeCache.txt
 CMakeFiles/
