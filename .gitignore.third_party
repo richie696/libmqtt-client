@@ -1,0 +1,5 @@
+# Third-party dependencies
+third_party/wolfmqtt/
+!third_party/wolfmqtt/.git
+third_party/wolfssl/
+!third_party/wolfssl/.git

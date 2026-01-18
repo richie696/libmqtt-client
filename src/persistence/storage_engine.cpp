@@ -1,0 +1,224 @@
+/**
+ * @file storage_engine.cpp
+ * @brief 存储引擎实现
+ */
+
+#include "mqtt_client/persistence/storage_engine.h"
+#include "mqtt_client/core/error.h"
+#include "mqtt_client/logger/logger_interface.h"
+#include <fstream>
+#include <filesystem>
+#include <sstream>
+
+namespace mqtt_client {
+
+// 使用宏定义日志接口
+#define LOG_ERROR(msg) \
+    do { \
+        if (LoggerManager::getInstance().getLogger()) { \
+            LoggerManager::getInstance().getLogger()->log(LogLevel::ERROR, msg, __FILE__, __LINE__); \
+        } \
+    } while(0)
+
+#define LOG_WARN(msg) \
+    do { \
+        if (LoggerManager::getInstance().getLogger()) { \
+            LoggerManager::getInstance().getLogger()->log(LogLevel::WARN, msg, __FILE__, __LINE__); \
+        } \
+    } while(0)
+
+#define LOG_INFO(msg) \
+    do { \
+        if (LoggerManager::getInstance().getLogger()) { \
+            LoggerManager::getInstance().getLogger()->log(LogLevel::INFO, msg, __FILE__, __LINE__); \
+        } \
+    } while(0)
+
+#define LOG_DEBUG(msg) \
+    do { \
+        if (LoggerManager::getInstance().getLogger()) { \
+            LoggerManager::getInstance().getLogger()->log(LogLevel::DEBUG, msg, __FILE__, __LINE__); \
+        } \
+    } while(0)
+
+FileStorageEngine::FileStorageEngine(const std::string& basePath)
+    : basePath_(basePath) {
+    // 确保基础目录存在
+    ensureDirectory(basePath_);
+}
+
+Result<bool> FileStorageEngine::write(const std::string& key, const std::string& data) {
+    try {
+        std::string fullPath = getFullPath(key);
+        
+        // 确保目录存在
+        std::filesystem::path path(fullPath);
+        std::string dirPath = path.parent_path().string();
+        auto dirResult = ensureDirectory(dirPath);
+        if (!dirResult.success) {
+            return Result<bool>::Failure(
+                MqttError(MqttErrorCode::PERSISTENCE_ERROR,
+                         "无法创建目录: " + dirPath));
+        }
+        
+        // 写入文件（原子写入：先写临时文件，再重命名）
+        std::string tempPath = fullPath + ".tmp";
+        std::ofstream file(tempPath, std::ios::binary);
+        if (!file.is_open()) {
+            return Result<bool>::Failure(
+                MqttError(MqttErrorCode::PERSISTENCE_ERROR,
+                         "无法打开文件写入: " + tempPath));
+        }
+        
+        file.write(data.c_str(), data.length());
+        file.close();
+        
+        if (!file.good()) {
+            std::filesystem::remove(tempPath);
+            return Result<bool>::Failure(
+                MqttError(MqttErrorCode::PERSISTENCE_ERROR,
+                         "写入文件失败: " + tempPath));
+        }
+        
+        // 原子重命名
+        std::filesystem::rename(tempPath, fullPath);
+        
+        LOG_DEBUG("写入文件成功: " + fullPath);
+        return Result<bool>::Success(true);
+    } catch (const std::exception& e) {
+        return Result<bool>::Failure(
+            MqttError(MqttErrorCode::PERSISTENCE_ERROR,
+                     "写入文件异常: " + std::string(e.what())));
+    }
+}
+
+Result<std::string> FileStorageEngine::read(const std::string& key) {
+    try {
+        std::string fullPath = getFullPath(key);
+        
+        if (!exists(key)) {
+            return Result<std::string>::Failure(
+                MqttError(MqttErrorCode::PERSISTENCE_ERROR,
+                         "文件不存在: " + fullPath));
+        }
+        
+        std::ifstream file(fullPath, std::ios::binary);
+        if (!file.is_open()) {
+            return Result<std::string>::Failure(
+                MqttError(MqttErrorCode::PERSISTENCE_ERROR,
+                         "无法打开文件读取: " + fullPath));
+        }
+        
+        std::stringstream buffer;
+        buffer << file.rdbuf();
+        file.close();
+        
+        std::string data = buffer.str();
+        LOG_DEBUG("读取文件成功: " + fullPath + ", 大小: " + std::to_string(data.length()));
+        return Result<std::string>::Success(data);
+    } catch (const std::exception& e) {
+        return Result<std::string>::Failure(
+            MqttError(MqttErrorCode::PERSISTENCE_ERROR,
+                     "读取文件异常: " + std::string(e.what())));
+    }
+}
+
+Result<bool> FileStorageEngine::remove(const std::string& key) {
+    try {
+        std::string fullPath = getFullPath(key);
+        
+        if (!exists(key)) {
+            // 文件不存在，认为删除成功
+            return Result<bool>::Success(true);
+        }
+        
+        bool removed = std::filesystem::remove(fullPath);
+        if (removed) {
+            LOG_DEBUG("删除文件成功: " + fullPath);
+            return Result<bool>::Success(true);
+        } else {
+            return Result<bool>::Failure(
+                MqttError(MqttErrorCode::PERSISTENCE_ERROR,
+                         "删除文件失败: " + fullPath));
+        }
+    } catch (const std::exception& e) {
+        return Result<bool>::Failure(
+            MqttError(MqttErrorCode::PERSISTENCE_ERROR,
+                     "删除文件异常: " + std::string(e.what())));
+    }
+}
+
+bool FileStorageEngine::exists(const std::string& key) {
+    try {
+        std::string fullPath = getFullPath(key);
+        return std::filesystem::exists(fullPath) && 
+               std::filesystem::is_regular_file(fullPath);
+    } catch (const std::exception& e) {
+        LOG_ERROR("检查文件存在性异常: " + std::string(e.what()));
+        return false;
+    }
+}
+
+Result<bool> FileStorageEngine::clear() {
+    try {
+        if (std::filesystem::exists(basePath_)) {
+            std::filesystem::remove_all(basePath_);
+            LOG_INFO("清空存储目录: " + basePath_);
+        }
+        return Result<bool>::Success(true);
+    } catch (const std::exception& e) {
+        return Result<bool>::Failure(
+            MqttError(MqttErrorCode::PERSISTENCE_ERROR,
+                     "清空存储目录异常: " + std::string(e.what())));
+    }
+}
+
+std::string FileStorageEngine::getFullPath(const std::string& key) const {
+    if (key.empty()) {
+        return basePath_;
+    }
+    
+    // 如果key已经是绝对路径，直接返回
+    if (std::filesystem::path(key).is_absolute()) {
+        return key;
+    }
+    
+    // 否则拼接基础路径
+    std::filesystem::path base(basePath_);
+    std::filesystem::path file(key);
+    return (base / file).string();
+}
+
+Result<bool> FileStorageEngine::ensureDirectory(const std::string& path) {
+    try {
+        if (path.empty()) {
+            return Result<bool>::Success(true);
+        }
+        
+        if (std::filesystem::exists(path)) {
+            if (std::filesystem::is_directory(path)) {
+                return Result<bool>::Success(true);
+            } else {
+                return Result<bool>::Failure(
+                    MqttError(MqttErrorCode::PERSISTENCE_ERROR,
+                             "路径已存在但不是目录: " + path));
+            }
+        }
+        
+        // 创建目录（包括父目录）
+        bool created = std::filesystem::create_directories(path);
+        if (created || std::filesystem::exists(path)) {
+            return Result<bool>::Success(true);
+        } else {
+            return Result<bool>::Failure(
+                MqttError(MqttErrorCode::PERSISTENCE_ERROR,
+                         "无法创建目录: " + path));
+        }
+    } catch (const std::exception& e) {
+        return Result<bool>::Failure(
+            MqttError(MqttErrorCode::PERSISTENCE_ERROR,
+                     "创建目录异常: " + std::string(e.what())));
+    }
+}
+
+} // namespace mqtt_client

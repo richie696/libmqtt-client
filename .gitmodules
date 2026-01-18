@@ -1,0 +1,9 @@
+# Git Submodules配置
+# 此文件由git submodule命令自动生成和维护
+
+[submodule "third_party/wolfmqtt"]
+	path = third_party/wolfmqtt
+	url = https://github.com/wolfSSL/wolfMQTT.git
+[submodule "/Users/richie696/Projects/workspace/libmqtt-client/third_party/wolfmqtt"]
+	path = /Users/richie696/Projects/workspace/libmqtt-client/third_party/wolfmqtt
+	url = https://github.com/wolfSSL/wolfMQTT.git

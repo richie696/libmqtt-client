@@ -1,0 +1,32 @@
+# ARM 32位交叉编译工具链文件
+# 使用方法: cmake -DCMAKE_TOOLCHAIN_FILE=toolchains/arm-linux-gnueabihf.cmake ..
+
+set(CMAKE_SYSTEM_NAME Linux)
+set(CMAKE_SYSTEM_PROCESSOR arm)
+
+# 交叉编译器前缀
+set(CROSS_COMPILE_PREFIX arm-linux-gnueabihf)
+
+# 设置交叉编译器
+set(CMAKE_C_COMPILER ${CROSS_COMPILE_PREFIX}-gcc)
+set(CMAKE_CXX_COMPILER ${CROSS_COMPILE_PREFIX}-g++)
+
+# 设置工具链程序
+set(CMAKE_AR ${CROSS_COMPILE_PREFIX}-ar)
+set(CMAKE_AS ${CROSS_COMPILE_PREFIX}-as)
+set(CMAKE_LINKER ${CROSS_COMPILE_PREFIX}-ld)
+set(CMAKE_NM ${CROSS_COMPILE_PREFIX}-nm)
+set(CMAKE_OBJCOPY ${CROSS_COMPILE_PREFIX}-objcopy)
+set(CMAKE_OBJDUMP ${CROSS_COMPILE_PREFIX}-objdump)
+set(CMAKE_RANLIB ${CROSS_COMPILE_PREFIX}-ranlib)
+set(CMAKE_STRIP ${CROSS_COMPILE_PREFIX}-strip)
+
+# 设置编译选项
+set(CMAKE_C_FLAGS "${CMAKE_C_FLAGS} -march=armv7-a -mfpu=neon -mfloat-abi=hard")
+set(CMAKE_CXX_FLAGS "${CMAKE_CXX_FLAGS} -march=armv7-a -mfpu=neon -mfloat-abi=hard")
+
+# 设置查找程序的模式
+set(CMAKE_FIND_ROOT_PATH_MODE_PROGRAM NEVER)
+set(CMAKE_FIND_ROOT_PATH_MODE_LIBRARY ONLY)
+set(CMAKE_FIND_ROOT_PATH_MODE_INCLUDE ONLY)
+set(CMAKE_FIND_ROOT_PATH_MODE_PACKAGE ONLY)

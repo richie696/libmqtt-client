@@ -1,41 +1,98 @@
-# Prerequisites
-*.d
+# 构建目录
+build/
+build-*/
+cmake-build-*/
+third_party/*/build*/
+third_party/*/build-*/
 
-# Compiled Object files
-*.slo
-*.lo
+# CMake生成的文件
+CMakeCache.txt
+CMakeFiles/
+cmake_install.cmake
+*.cmake
+!CMakeLists.txt
+!toolchains/*.cmake
+compile_commands.json
+
+# CMake FetchContent 生成的依赖目录
+_deps/
+
+# 编译产物
 *.o
 *.obj
-
-# Precompiled Headers
-*.gch
-*.pch
-
-# Linker files
-*.ilk
-
-# Debugger Files
-*.pdb
-
-# Compiled Dynamic libraries
+*.a
+*.lib
 *.so
 *.dylib
 *.dll
-
-# Fortran module files
-*.mod
-*.smod
-
-# Compiled Static libraries
-*.lai
-*.la
-*.a
-*.lib
-
-# Executables
 *.exe
-*.out
-*.app
+*.pdb
+*.ilk
 
-# debug information files
-*.dwo
+# IDE文件
+.idea/
+.vscode/
+*.swp
+*.swo
+*~
+*.sublime-project
+*.sublime-workspace
+.clangd/
+.clang-format.bak
+
+# 系统文件
+.DS_Store
+.DS_Store?
+._*
+.Spotlight-V100
+.Trashes
+ehthumbs.db
+Thumbs.db
+Desktop.ini
+
+# Python相关
+__pycache__/
+*.py[cod]
+*$py.class
+*.pyc
+.pytest_cache/
+.coverage
+htmlcov/
+*.egg-info/
+dist/
+*.egg
+
+# 日志和临时文件
+*.log
+*.tmp
+*.temp
+*.bak
+*.backup
+*.swp
+*.swo
+*~
+
+# 测试输出
+Testing/
+test-results/
+coverage/
+*.gcda
+*.gcno
+*.gcov
+
+# 文档生成
+docs/html/
+docs/latex/
+docs/man/
+
+# 包管理
+conan.lock
+vcpkg_installed/
+
+# 其他
+*.user
+*.suo
+*.sdf
+*.opensdf
+*.db
+*.opendb

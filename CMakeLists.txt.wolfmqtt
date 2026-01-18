@@ -1,0 +1,119 @@
+# ============================================================================
+# wolfMQTT 依赖配置
+# ============================================================================
+# 此部分需要添加到主CMakeLists.txt中
+
+# 选项：是否启用wolfMQTT
+option(ENABLE_WOLFMQTT "Enable wolfMQTT support" ON)
+
+if(ENABLE_WOLFMQTT)
+    message(STATUS "========== wolfMQTT 配置 ==========")
+    
+    # 方法1: 使用Git Submodule（推荐）
+    # 假设wolfMQTT已经作为submodule添加到 third_party/wolfmqtt
+    set(WOLFMQTT_ROOT "${CMAKE_SOURCE_DIR}/third_party/wolfmqtt")
+    
+    if(EXISTS "${WOLFMQTT_ROOT}/CMakeLists.txt")
+        # 如果wolfMQTT提供了CMake支持
+        message(STATUS "使用wolfMQTT的CMake构建系统")
+        add_subdirectory(${WOLFMQTT_ROOT} wolfmqtt)
+        set(WOLFMQTT_FOUND TRUE)
+    elseif(EXISTS "${WOLFMQTT_ROOT}/src/mqtt_client.c")
+        # 手动构建wolfMQTT
+        message(STATUS "手动构建wolfMQTT")
+        
+        # 查找wolfMQTT头文件
+        set(WOLFMQTT_INCLUDE_DIR "${WOLFMQTT_ROOT}/include")
+        
+        if(NOT EXISTS "${WOLFMQTT_INCLUDE_DIR}/wolfmqtt/mqtt_client.h")
+            message(FATAL_ERROR "wolfMQTT头文件未找到: ${WOLFMQTT_INCLUDE_DIR}/wolfmqtt/mqtt_client.h")
+        endif()
+        
+        # 查找或构建wolfMQTT库
+        # 选项A: 使用预编译的库
+        find_library(WOLFMQTT_LIBRARY
+            NAMES wolfmqtt
+            PATHS
+                ${WOLFMQTT_ROOT}/install/lib
+                ${WOLFMQTT_ROOT}/.libs
+                /usr/local/lib
+                /usr/lib
+        )
+        
+        if(WOLFMQTT_LIBRARY)
+            message(STATUS "找到wolfMQTT库: ${WOLFMQTT_LIBRARY}")
+            set(WOLFMQTT_FOUND TRUE)
+        else()
+            # 选项B: 使用ExternalProject构建
+            message(STATUS "使用ExternalProject构建wolfMQTT")
+            
+            include(ExternalProject)
+            
+            ExternalProject_Add(
+                wolfmqtt_build
+                SOURCE_DIR ${WOLFMQTT_ROOT}
+                CONFIGURE_COMMAND ${WOLFMQTT_ROOT}/autogen.sh COMMAND ${WOLFMQTT_ROOT}/configure --enable-mqtt5 --prefix=${CMAKE_BINARY_DIR}/third_party/wolfmqtt/install
+                BUILD_COMMAND make -j${CMAKE_BUILD_PARALLEL_LEVEL}
+                INSTALL_COMMAND make install
+                BUILD_IN_SOURCE 1
+            )
+            
+            set(WOLFMQTT_INCLUDE_DIR "${CMAKE_BINARY_DIR}/third_party/wolfmqtt/install/include")
+            set(WOLFMQTT_LIBRARY "${CMAKE_BINARY_DIR}/third_party/wolfmqtt/install/lib/libwolfmqtt.a")
+            
+            add_dependencies(mqtt_client wolfmqtt_build)
+            set(WOLFMQTT_FOUND TRUE)
+        endif()
+    else()
+        message(WARNING "wolfMQTT源码未找到，请执行: git submodule update --init --recursive")
+        set(WOLFMQTT_FOUND FALSE)
+    endif()
+    
+    # 如果找到wolfMQTT，添加到目标
+    if(WOLFMQTT_FOUND)
+        message(STATUS "wolfMQTT头文件目录: ${WOLFMQTT_INCLUDE_DIR}")
+        message(STATUS "wolfMQTT库: ${WOLFMQTT_LIBRARY}")
+        
+        target_include_directories(mqtt_client PRIVATE ${WOLFMQTT_INCLUDE_DIR})
+        target_link_libraries(mqtt_client PRIVATE ${WOLFMQTT_LIBRARY})
+        
+        # 添加编译定义
+        target_compile_definitions(mqtt_client PRIVATE
+            WOLFMQTT_ENABLED=1
+        )
+    endif()
+    
+    # 查找wolfSSL（TLS支持，可选）
+    option(ENABLE_WOLFSSL "Enable wolfSSL for TLS support" ON)
+    
+    if(ENABLE_WOLFSSL)
+        find_path(WOLFSSL_INCLUDE_DIR
+            NAMES wolfssl/ssl.h
+            PATHS
+                ${CMAKE_SOURCE_DIR}/third_party/wolfssl
+                /usr/local/include
+                /usr/include
+        )
+        
+        find_library(WOLFSSL_LIBRARY
+            NAMES wolfssl
+            PATHS
+                ${CMAKE_SOURCE_DIR}/third_party/wolfssl
+                /usr/local/lib
+                /usr/lib
+        )
+        
+        if(WOLFSSL_INCLUDE_DIR AND WOLFSSL_LIBRARY)
+            message(STATUS "找到wolfSSL: ${WOLFSSL_LIBRARY}")
+            target_include_directories(mqtt_client PRIVATE ${WOLFSSL_INCLUDE_DIR})
+            target_link_libraries(mqtt_client PRIVATE ${WOLFSSL_LIBRARY})
+            target_compile_definitions(mqtt_client PRIVATE WOLFSSL_ENABLED=1)
+        else()
+            message(STATUS "wolfSSL未找到，TLS功能将不可用")
+        endif()
+    endif()
+    
+    message(STATUS "================================")
+else()
+    message(STATUS "wolfMQTT支持已禁用")
+endif()
