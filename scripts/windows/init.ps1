@@ -17,7 +17,8 @@ function Write-ColorOutput($ForegroundColor) {
 
 # 获取脚本和项目目录
 $ScriptDir = Split-Path -Parent $MyInvocation.MyCommand.Path
-$ProjectRoot = Split-Path -Parent $ScriptDir
+# 脚本在 scripts/windows/ 目录下，需要向上两级才能到达项目根目录
+$ProjectRoot = Split-Path -Parent (Split-Path -Parent $ScriptDir)
 $WolfMqttDir = Join-Path $ProjectRoot "third_party\wolfmqtt"
 $WolfMqttInstallDir = Join-Path $WolfMqttDir "install"
 
@@ -163,12 +164,84 @@ function Check-BasicDependencies {
     Write-Host ""
 }
 
+# 从 .gitmodules 读取 submodule 路径的辅助函数
+function Get-SubmodulePaths {
+    param(
+        [string]$GitmodulesFile
+    )
+    if (-not (Test-Path $GitmodulesFile)) {
+        return @()
+    }
+    $paths = @()
+    $pathLines = Select-String -Path $GitmodulesFile -Pattern "^\s*path\s*="
+    foreach ($line in $pathLines) {
+        $path = ($line.Line -split "=")[1].Trim()
+        $paths += $path
+    }
+    return $paths
+}
+
+# 从 .gitmodules 读取 submodule URL 的辅助函数
+function Get-SubmoduleUrl {
+    param(
+        [string]$GitmodulesFile,
+        [string]$SubmodulePath
+    )
+    if (-not (Test-Path $GitmodulesFile) -or [string]::IsNullOrEmpty($SubmodulePath)) {
+        return $null
+    }
+    $content = Get-Content $GitmodulesFile
+    $inBlock = $false
+    $foundPath = $false
+    foreach ($line in $content) {
+        if ($line -match "^\[submodule") {
+            $inBlock = $false
+            $foundPath = $false
+        }
+        if ($line -match "^\s*path\s*=") {
+            $path = ($line -split "=")[1].Trim()
+            if ($path -eq $SubmodulePath) {
+                $inBlock = $true
+                $foundPath = $true
+            }
+        }
+        if ($inBlock -and $foundPath -and $line -match "^\s*url\s*=") {
+            $url = ($line -split "=")[1].Trim()
+            return $url
+        }
+    }
+    return $null
+}
+
+# 检查 submodule 是否在 git 索引中注册
+function Test-SubmoduleRegistered {
+    param(
+        [string]$SubmodulePath
+    )
+    if ([string]::IsNullOrEmpty($SubmodulePath)) {
+        return $false
+    }
+    Push-Location $ProjectRoot
+    try {
+        $result = git ls-tree HEAD $SubmodulePath 2>$null
+        if ($LASTEXITCODE -eq 0 -and $result -match "^160000") {
+            return $true
+        }
+        return $false
+    } finally {
+        Pop-Location
+    }
+}
+
 # 初始化 Git Submodules
 function Init-Submodules {
     Write-ColorOutput Blue "========== 初始化 Git Submodules =========="
     
-    # 检查是否在Git仓库中
-    if (-not (Test-Path (Join-Path $ProjectRoot ".git"))) {
+    # 检查是否在Git仓库中（支持 .git 目录或 .git 文件）
+    $gitPath = Join-Path $ProjectRoot ".git"
+    $isGitRepo = (Test-Path $gitPath) -or (Test-Path (Join-Path $ProjectRoot ".gitmodules"))
+    
+    if (-not $isGitRepo) {
         Write-ColorOutput Yellow "警告: 当前目录不是Git仓库"
         Write-ColorOutput Yellow "跳过 Git Submodule 初始化"
         Write-Host ""
@@ -183,41 +256,290 @@ function Init-Submodules {
         return
     }
     
-    # 检查 wolfMQTT submodule 是否已初始化
-    $wolfMqttGitPath = Join-Path $WolfMqttDir ".git"
-    if (-not (Test-Path $WolfMqttDir) -or -not (Test-Path $wolfMqttGitPath)) {
-        Write-ColorOutput Yellow "检测到 wolfMQTT submodule 未初始化"
-        Write-ColorOutput Cyan "正在初始化 Git Submodules..."
+    # 获取所有 submodule 路径
+    $submodulePaths = Get-SubmodulePaths -GitmodulesFile $gitmodulesPath
+    if ($submodulePaths.Count -eq 0) {
+        Write-ColorOutput Yellow "未找到任何 submodule 配置"
+        Write-Host ""
+        return
+    }
+    
+    # 确保在项目根目录执行
+    Push-Location $ProjectRoot
+    try {
+        $submodulesNeedAdd = $false
+        $submodulesNeedInit = $false
         
-        Push-Location $ProjectRoot
-        try {
-            git submodule update --init --recursive
-            if ($LASTEXITCODE -ne 0) {
-                throw "Git submodule 初始化失败"
+        # 检查每个 submodule
+        foreach ($submodulePath in $submodulePaths) {
+            $submoduleDir = Join-Path $ProjectRoot $submodulePath
+            $submoduleGitPath = Join-Path $submoduleDir ".git"
+            $isSubmoduleInitialized = (Test-Path $submoduleDir) -and ((Test-Path $submoduleGitPath) -or (Test-Path (Join-Path $submoduleDir ".git")))
+            
+            if (-not $isSubmoduleInitialized) {
+                # 检查是否在 git 索引中注册
+                if (-not (Test-SubmoduleRegistered -SubmodulePath $submodulePath)) {
+                    Write-ColorOutput Yellow "检测到 submodule 未在 Git 索引中注册: $submodulePath"
+                    $submodulesNeedAdd = $true
+                    
+                    # 获取 submodule URL
+                    $submoduleUrl = Get-SubmoduleUrl -GitmodulesFile $gitmodulesPath -SubmodulePath $submodulePath
+                    if ([string]::IsNullOrEmpty($submoduleUrl)) {
+                        Write-ColorOutput Red "✗ 无法从 .gitmodules 获取 $submodulePath 的 URL"
+                        Write-ColorOutput Yellow "请检查 .gitmodules 文件配置"
+                        exit 1
+                    }
+                    
+                    # 检查目录是否存在但不是正确的 submodule
+                    if (Test-Path $submoduleDir) {
+                        $submoduleGitPath = Join-Path $submoduleDir ".git"
+                        # 检查是否是独立的 git 仓库（有 .git 目录或文件）
+                        if ((Test-Path $submoduleGitPath) -or (Test-Path (Join-Path $submoduleDir ".git"))) {
+                            Write-ColorOutput Yellow "检测到目录已存在但不是正确的 submodule: $submodulePath"
+                            Write-ColorOutput Cyan "正在清理不完整的 submodule 目录..."
+                            
+                            # 询问用户是否要删除（在非交互模式下自动删除）
+                            if ([Environment]::UserInteractive) {
+                                $response = Read-Host "是否删除现有目录并重新添加? (y/n) [y]"
+                                if ($response -and $response -notmatch "^[Yy]$") {
+                                    Write-ColorOutput Yellow "跳过 submodule 添加"
+                                    continue
+                                }
+                            }
+                            
+                            # 删除现有目录
+                            Write-ColorOutput Cyan "删除目录: $submoduleDir"
+                            try {
+                                Remove-Item -Path $submoduleDir -Recurse -Force -ErrorAction Stop
+                                Write-ColorOutput Green "✓ 目录已删除"
+                            } catch {
+                                Write-ColorOutput Red "✗ 无法删除目录: $submoduleDir - $_"
+                                Write-ColorOutput Yellow "请手动删除后重试"
+                                exit 1
+                            }
+                        } else {
+                            # 目录存在但没有 .git，可能是空目录或其他文件
+                            Write-ColorOutput Yellow "检测到目录存在但不是 git 仓库: $submodulePath"
+                            Write-ColorOutput Cyan "正在清理目录..."
+                            try {
+                                Remove-Item -Path $submoduleDir -Recurse -Force -ErrorAction Stop
+                            } catch {
+                                Write-ColorOutput Red "✗ 无法删除目录: $submoduleDir - $_"
+                                exit 1
+                            }
+                        }
+                    }
+                    
+                    # 创建父目录
+                    $parentDir = Split-Path -Parent $submoduleDir
+                    if ($parentDir -ne $ProjectRoot -and -not (Test-Path $parentDir)) {
+                        Write-ColorOutput Cyan "创建父目录: $parentDir"
+                        try {
+                            New-Item -ItemType Directory -Path $parentDir -Force | Out-Null
+                        } catch {
+                            Write-ColorOutput Red "✗ 无法创建目录: $parentDir - $_"
+                            exit 1
+                        }
+                    }
+                    
+                    # 使用 git submodule add 添加 submodule
+                    Write-ColorOutput Cyan "正在添加 submodule: $submodulePath"
+                    Write-ColorOutput Cyan "  URL: $submoduleUrl"
+                    
+                    # 尝试添加 submodule
+                    $addOutput = git submodule add $submoduleUrl $submodulePath 2>&1
+                    $addExitCode = $LASTEXITCODE
+                    
+                    if ($addOutput) {
+                        Write-Host $addOutput
+                    }
+                    
+                    if ($addExitCode -eq 0) {
+                        Write-ColorOutput Green "✓ Submodule 添加成功: $submodulePath"
+                    } else {
+                        # 如果失败，尝试使用 --force 选项
+                        Write-ColorOutput Yellow "常规添加失败，尝试使用 --force 选项..."
+                        $addOutput = git submodule add --force $submoduleUrl $submodulePath 2>&1
+                        $addExitCode = $LASTEXITCODE
+                        
+                        if ($addOutput) {
+                            Write-Host $addOutput
+                        }
+                        
+                        if ($addExitCode -eq 0) {
+                            Write-ColorOutput Green "✓ Submodule 添加成功 (使用 --force): $submodulePath"
+                        } else {
+                            Write-ColorOutput Red "✗ Submodule 添加失败: $submodulePath"
+                            Write-ColorOutput Yellow "错误信息:"
+                            git submodule add $submoduleUrl $submodulePath 2>&1 | Select-Object -First 5
+                            Write-ColorOutput Yellow "请检查:"
+                            Write-ColorOutput Yellow "  1. 网络连接是否正常"
+                            Write-ColorOutput Yellow "  2. Git 配置是否正确"
+                            Write-ColorOutput Yellow "  3. 目录权限是否正确"
+                            Write-ColorOutput Yellow "  4. 如果目录已存在，请手动删除后重试"
+                            exit 1
+                        }
+                    }
+                } else {
+                    $submodulesNeedInit = $true
+                }
+            }
+        }
+        
+        # 如果有 submodule 需要初始化（已注册但未下载）
+        if ($submodulesNeedInit) {
+            Write-ColorOutput Yellow "检测到 submodule 未初始化"
+            Write-ColorOutput Cyan "正在初始化 Git Submodules..."
+            
+            # 显示调试信息
+            Write-ColorOutput Cyan "项目根目录: $ProjectRoot"
+            
+            # 从 .gitmodules 文件中读取所有 submodule 路径，并创建对应的父目录
+            $GitmodulesFile = Join-Path $ProjectRoot ".gitmodules"
+            if (Test-Path $GitmodulesFile) {
+                Write-ColorOutput Cyan "检查并创建 submodule 父目录..."
+                # 提取所有 path = 行
+                $pathLines = Select-String -Path $GitmodulesFile -Pattern "^\s*path\s*="
+                foreach ($line in $pathLines) {
+                    # 提取路径（去除 path = 和空格）
+                    $path = ($line.Line -split "=")[1].Trim()
+                    # 获取父目录
+                    $parentDir = Join-Path $ProjectRoot (Split-Path -Parent $path)
+                    
+                    # 如果父目录不是项目根目录，且不存在，则创建
+                    if ($parentDir -ne $ProjectRoot -and -not (Test-Path $parentDir)) {
+                        Write-ColorOutput Yellow "创建目录: $parentDir"
+                        try {
+                            New-Item -ItemType Directory -Path $parentDir -Force | Out-Null
+                            Write-ColorOutput Green "✓ 目录已创建: $parentDir"
+                        } catch {
+                            Write-ColorOutput Red "✗ 无法创建目录: $parentDir - $_"
+                            exit 1
+                        }
+                    }
+                }
             }
             
-            if ((Test-Path $WolfMqttDir) -and (Test-Path $wolfMqttGitPath)) {
-                Write-ColorOutput Green "✓ Git Submodules 初始化完成"
-            } else {
-                Write-ColorOutput Red "✗ Git Submodules 初始化失败"
-                Write-ColorOutput Yellow "请手动运行: git submodule update --init --recursive"
+            Write-Host "执行: git submodule update --init --recursive" -ForegroundColor Cyan
+            
+            # 执行 git submodule 初始化，捕获输出
+            $gitOutput = git submodule update --init --recursive 2>&1
+            $gitExitCode = $LASTEXITCODE
+            
+            # 显示 git 命令的输出（如果有）
+            if ($gitOutput) {
+                Write-Host $gitOutput
+            }
+            
+            # 检查命令执行结果
+            if ($gitExitCode -ne 0) {
+                Write-ColorOutput Red "✗ Git Submodules 初始化失败 (退出码: $gitExitCode)"
+                Write-ColorOutput Yellow "请检查:"
+                Write-ColorOutput Yellow "  1. 是否在正确的 Git 仓库中"
+                Write-ColorOutput Yellow "  2. .gitmodules 文件是否正确配置"
+                Write-ColorOutput Yellow "  3. 网络连接是否正常（需要从远程仓库克隆）"
+                Write-ColorOutput Yellow "  4. Git 配置是否正确（user.name, user.email）"
+                Write-ColorOutput Yellow "手动运行: cd $ProjectRoot; git submodule update --init --recursive"
                 exit 1
             }
-        } finally {
-            Pop-Location
+            
+            # 验证父目录是否存在
+            $ThirdPartyDir = Join-Path $ProjectRoot "third_party"
+            if (-not (Test-Path $ThirdPartyDir)) {
+                Write-ColorOutput Red "✗ 错误: third_party 目录不存在，即使已尝试创建"
+                Write-ColorOutput Yellow "请检查目录权限"
+                exit 1
+            }
+            
+            # 验证所有 submodule 是否已正确初始化
+            $initFailed = $false
+            $failedPaths = @()
+            
+            foreach ($submodulePath in $submodulePaths) {
+                $submoduleDir = Join-Path $ProjectRoot $submodulePath
+                $submoduleGitPath = Join-Path $submoduleDir ".git"
+                $parentDir = Split-Path -Parent $submoduleDir
+                
+                # 检查父目录是否存在
+                if ($parentDir -ne $ProjectRoot -and -not (Test-Path $parentDir)) {
+                    Write-ColorOutput Red "✗ 错误: 父目录不存在: $parentDir"
+                    Write-ColorOutput Yellow "请检查目录权限"
+                    $initFailed = $true
+                    $failedPaths += $submodulePath
+                    continue
+                }
+                
+                # 检查 submodule 目录和 .git 文件/目录
+                $gitExists = (Test-Path $submoduleGitPath) -or (Test-Path (Join-Path $submoduleDir ".git"))
+                if ((Test-Path $submoduleDir) -and $gitExists) {
+                    Write-ColorOutput Green "✓ Submodule 已初始化: $submodulePath"
+                } else {
+                    $initFailed = $true
+                    $failedPaths += $submodulePath
+                    Write-ColorOutput Red "✗ Submodule 初始化失败: $submodulePath"
+                    Write-ColorOutput Yellow "预期路径: $submoduleDir"
+                    
+                    if (Test-Path $submoduleDir) {
+                        Write-ColorOutput Yellow "目录存在，但 .git 文件/目录缺失"
+                        Write-ColorOutput Cyan "目录内容:"
+                        Get-ChildItem $submoduleDir -ErrorAction SilentlyContinue | Select-Object -First 10 | ForEach-Object {
+                            Write-Host "  $($_.Name)" -ForegroundColor Cyan
+                        }
+                    } else {
+                        Write-ColorOutput Yellow "目录不存在"
+                    }
+                }
+            }
+            
+            if ($initFailed) {
+                Write-ColorOutput Yellow "当前工作目录: $(Get-Location)"
+                Write-ColorOutput Yellow "项目根目录: $ProjectRoot"
+                Write-ColorOutput Yellow "请尝试手动运行:"
+                Write-ColorOutput Cyan "  cd $ProjectRoot"
+                Write-ColorOutput Cyan "  git submodule update --init --recursive"
+                Write-ColorOutput Yellow "如果仍然失败，请检查:"
+                Write-ColorOutput Yellow "  1. Git 仓库状态: git status"
+                Write-ColorOutput Yellow "  2. Submodule 状态: git submodule status"
+                Write-ColorOutput Yellow "  3. .gitmodules 内容是否正确"
+                exit 1
+            } else {
+                Write-ColorOutput Green "✓ 所有 Git Submodules 初始化完成"
+            }
         }
-    } else {
+    } catch {
+        Write-ColorOutput Red "✗ Git Submodules 初始化失败: $_"
+        Write-ColorOutput Yellow "请手动运行: cd $ProjectRoot; git submodule update --init --recursive"
+        exit 1
+    } finally {
+        Pop-Location
+    }
+    
+    # 如果所有 submodule 都已初始化，检查是否需要更新
+    $allInitialized = $true
+    foreach ($submodulePath in $submodulePaths) {
+        $submoduleDir = Join-Path $ProjectRoot $submodulePath
+        $submoduleGitPath = Join-Path $submoduleDir ".git"
+        $isSubmoduleInitialized = (Test-Path $submoduleDir) -and ((Test-Path $submoduleGitPath) -or (Test-Path (Join-Path $submoduleDir ".git")))
+        if (-not $isSubmoduleInitialized) {
+            $allInitialized = $false
+            break
+        }
+    }
+    
+    if ($allInitialized) {
         Write-ColorOutput Green "✓ Git Submodules 已初始化"
         
         # 检查是否需要更新
         Push-Location $WolfMqttDir
         try {
             git fetch origin 2>$null | Out-Null
-            $currentCommit = git rev-parse HEAD
-            $remoteCommit = git rev-parse origin/master 2>$null
-            if ($LASTEXITCODE -eq 0 -and $currentCommit -ne $remoteCommit) {
-                Write-ColorOutput Yellow "检测到 wolfMQTT 有新版本可用"
-                Write-ColorOutput Yellow "如需更新，请运行: cd third_party\wolfmqtt && git pull origin master"
+            if ($LASTEXITCODE -eq 0) {
+                $currentCommit = git rev-parse HEAD
+                $remoteCommit = git rev-parse origin/master 2>$null
+                if ($LASTEXITCODE -eq 0 -and $currentCommit -ne $remoteCommit) {
+                    Write-ColorOutput Yellow "检测到 wolfMQTT 有新版本可用"
+                    Write-ColorOutput Yellow "如需更新，请运行: cd third_party\wolfmqtt && git pull origin master"
+                }
             }
         } catch {
             # 忽略错误

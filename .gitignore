@@ -12,10 +12,7 @@ third_party/*/build-*/
 # 或者运行初始化脚本: ./scripts/unix/init.sh 或 .\scripts\windows\init.ps1
 #
 # 排除 submodule 目录中的构建产物（Git 会自动处理 submodule 本身）
-third_party/wolfmqtt/build*/
-third_party/wolfmqtt/build-*/
-third_party/wolfmqtt/install/
-third_party/wolfmqtt/.libs/
+third_party/*/*
 
 # CMake生成的文件
 CMakeCache.txt

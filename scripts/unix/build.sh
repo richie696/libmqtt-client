@@ -26,7 +26,8 @@ TEST_TYPE=""  # unit, integration, all
 
 # 获取脚本和项目目录
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
-PROJECT_ROOT="$(cd "$SCRIPT_DIR/.." && pwd)"
+# 脚本在 scripts/unix/ 目录下，需要向上两级才能到达项目根目录
+PROJECT_ROOT="$(cd "$SCRIPT_DIR/../.." && pwd)"
 WOLFMQTT_DIR="${PROJECT_ROOT}/third_party/wolfmqtt"
 WOLFMQTT_BUILD_DIR="${WOLFMQTT_DIR}/build_cmake"
 WOLFMQTT_INSTALL_DIR="${WOLFMQTT_DIR}/install"
