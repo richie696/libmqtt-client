@@ -21,7 +21,7 @@ MqttSubscriptionManager::MqttSubscriptionManager(MqttConnectionManager& connecti
 MqttSubscriptionManager::~MqttSubscriptionManager() {
     // 在析构函数中，使用try_to_lock避免阻塞
     // 避免在对象销毁时出现mutex问题
-    std::unique_lock<std::mutex> lock(mutex_, std::try_to_lock);
+    std::unique_lock lock(mutex_, std::try_to_lock);
     if (lock.owns_lock()) {
         // 如果已连接，尝试取消所有订阅（可能失败，但不影响析构）
         if (connectionManager_.isConnected()) {
@@ -41,10 +41,10 @@ MqttSubscriptionManager::~MqttSubscriptionManager() {
     }
 }
 
-Result<bool> MqttSubscriptionManager::subscribe(const std::string& topic,
+Result<bool> MqttSubscriptionManager::subscribe(std::string_view topic,
                                                 MessageCallback callback,
                                                 QoS qos) {
-    std::lock_guard<std::mutex> lock(mutex_);
+    std::unique_lock lock(mutex_);  // 写操作，使用 unique_lock
     
     // 验证主题
     if (topic.empty() || topic.length() > 65535) {
@@ -57,14 +57,14 @@ Result<bool> MqttSubscriptionManager::subscribe(const std::string& topic,
     if (!validateTopicFilter(topic)) {
         return Result<bool>::Failure(
             MqttError(MqttErrorCode::INVALID_TOPIC,
-                     "主题过滤器无效: " + topic));
+                     "主题过滤器无效: " + std::string(topic)));
     }
     
     // 检查是否已订阅
-    auto it = subscriptions_.find(topic);
+    auto it = subscriptions_.find(std::string(topic));
     if (it != subscriptions_.end()) {
         // 已订阅，更新回调和QoS
-        LOG_DEBUG("主题已订阅，更新回调: " + topic);
+        LOG_DEBUG("主题已订阅，更新回调: " + std::string(topic));
         it->second.callback = callback;
         it->second.qos = qos;
         return Result<bool>::Success(true);
@@ -74,14 +74,14 @@ Result<bool> MqttSubscriptionManager::subscribe(const std::string& topic,
     if (!connectionManager_.isConnected()) {
         // 未连接，保存订阅信息，连接后自动订阅
         Subscription sub;
-        sub.topic = topic;
+        sub.topic = std::string(topic);
         sub.callback = callback;
         sub.qos = qos;
         sub.subscribedTime = std::time(nullptr);
         
-        subscriptions_[topic] = sub;
+        subscriptions_[sub.topic] = sub;
         
-        LOG_DEBUG("未连接，保存订阅信息: " + topic);
+        LOG_DEBUG("未连接，保存订阅信息: " + sub.topic);
         return Result<bool>::Success(true);
     }
     
@@ -100,25 +100,25 @@ Result<bool> MqttSubscriptionManager::subscribe(const std::string& topic,
     
     // 保存订阅信息
     Subscription sub;
-    sub.topic = topic;
+    sub.topic = std::string(topic);
     sub.callback = callback;
     sub.qos = qos;
     sub.subscribedTime = std::time(nullptr);
     
-    subscriptions_[topic] = sub;
+    subscriptions_[sub.topic] = sub;
     
-    LOG_DEBUG("订阅成功: " + topic + " (QoS: " + std::to_string(static_cast<int>(qos)) + ")");
+    LOG_DEBUG("订阅成功: " + sub.topic + " (QoS: " + std::to_string(static_cast<int>(qos)) + ")");
     
     return Result<bool>::Success(true);
 }
 
-Result<bool> MqttSubscriptionManager::unsubscribe(const std::string& topic) {
-    std::lock_guard<std::mutex> lock(mutex_);
+Result<bool> MqttSubscriptionManager::unsubscribe(std::string_view topic) {
+    std::unique_lock lock(mutex_);  // 写操作，使用 unique_lock
     
     // 检查是否已订阅
-    auto it = subscriptions_.find(topic);
+    auto it = subscriptions_.find(std::string(topic));
     if (it == subscriptions_.end()) {
-        LOG_DEBUG("主题未订阅: " + topic);
+        LOG_DEBUG("主题未订阅: " + std::string(topic));
         return Result<bool>::Success(true);  // 未订阅也算成功
     }
     
@@ -128,7 +128,7 @@ Result<bool> MqttSubscriptionManager::unsubscribe(const std::string& topic) {
         if (adapter) {
             auto result = adapter->unsubscribe(topic);
             if (!result) {
-                LOG_WARN("取消订阅失败: " + topic);
+                LOG_WARN("取消订阅失败: " + std::string(topic));
                 // 即使取消订阅失败，也从缓存中移除
             }
         }
@@ -137,13 +137,13 @@ Result<bool> MqttSubscriptionManager::unsubscribe(const std::string& topic) {
     // 从缓存中移除
     subscriptions_.erase(it);
     
-    LOG_DEBUG("取消订阅成功: " + topic);
+    LOG_DEBUG("取消订阅成功: " + std::string(topic));
     
     return Result<bool>::Success(true);
 }
 
 void MqttSubscriptionManager::unsubscribeAll() {
-    std::lock_guard<std::mutex> lock(mutex_);
+    std::unique_lock lock(mutex_);  // 写操作，使用 unique_lock
     
     // 如果已连接，取消所有订阅
     if (connectionManager_.isConnected()) {
@@ -162,7 +162,7 @@ void MqttSubscriptionManager::unsubscribeAll() {
 }
 
 Result<bool> MqttSubscriptionManager::resubscribeAll() {
-    std::lock_guard<std::mutex> lock(mutex_);
+    std::unique_lock lock(mutex_);  // 写操作，使用 unique_lock
     
     if (!connectionManager_.isConnected()) {
         return Result<bool>::Failure(
@@ -192,13 +192,13 @@ Result<bool> MqttSubscriptionManager::resubscribeAll() {
     return Result<bool>::Success(true);
 }
 
-void MqttSubscriptionManager::dispatchMessage(const std::string& topic,
-                                             const std::string& payload,
+void MqttSubscriptionManager::dispatchMessage(std::string_view topic,
+                                             std::string_view payload,
                                              const MqttProperties& properties) {
-    std::lock_guard<std::mutex> lock(mutex_);
+    std::shared_lock lock(mutex_);  // 读操作，使用 shared_lock（允许多个读操作并发）
     
     // 1. 精确匹配
-    auto it = subscriptions_.find(topic);
+    auto it = subscriptions_.find(std::string(topic));
     if (it != subscriptions_.end()) {
         if (it->second.callback) {
             try {
@@ -225,14 +225,14 @@ void MqttSubscriptionManager::dispatchMessage(const std::string& topic,
     }
 }
 
-bool MqttSubscriptionManager::isSubscribed(const std::string& topic) const {
-    std::lock_guard<std::mutex> lock(mutex_);
-    return subscriptions_.find(topic) != subscriptions_.end();
+bool MqttSubscriptionManager::isSubscribed(std::string_view topic) const {
+    std::shared_lock lock(mutex_);  // 读操作，使用 shared_lock
+    return subscriptions_.find(std::string(topic)) != subscriptions_.end();
 }
 
 std::vector<std::string> MqttSubscriptionManager::getSubscribedTopics() const {
-    // 使用try_to_lock避免在析构时阻塞
-    std::unique_lock<std::mutex> lock(mutex_, std::try_to_lock);
+    // 读操作，使用 shared_lock（try_to_lock 避免在析构时阻塞）
+    std::shared_lock lock(mutex_, std::try_to_lock);
     if (!lock.owns_lock()) {
         // 如果无法获取锁，返回空列表（避免阻塞）
         return std::vector<std::string>();
@@ -249,8 +249,8 @@ std::vector<std::string> MqttSubscriptionManager::getSubscribedTopics() const {
 }
 
 size_t MqttSubscriptionManager::getSubscriptionCount() const {
-    // 使用try_to_lock避免在析构时阻塞
-    std::unique_lock<std::mutex> lock(mutex_, std::try_to_lock);
+    // 读操作，使用 shared_lock（try_to_lock 避免在析构时阻塞）
+    std::shared_lock lock(mutex_, std::try_to_lock);
     if (lock.owns_lock()) {
         return subscriptions_.size();
     }
@@ -258,103 +258,96 @@ size_t MqttSubscriptionManager::getSubscriptionCount() const {
     return 0;
 }
 
-Result<bool> MqttSubscriptionManager::saveSubscription(const std::string& topic,
+Result<bool> MqttSubscriptionManager::saveSubscription(std::string_view topic,
                                                       MessageCallback callback,
                                                       QoS qos) {
-    std::lock_guard<std::mutex> lock(mutex_);
+    std::unique_lock lock(mutex_);  // 写操作，使用 unique_lock
     
     Subscription sub;
-    sub.topic = topic;
+    sub.topic = std::string(topic);
     sub.callback = callback;
     sub.qos = qos;
     sub.subscribedTime = std::time(nullptr);
     
-    subscriptions_[topic] = sub;
+    subscriptions_[sub.topic] = sub;
     
     return Result<bool>::Success(true);
 }
 
-bool MqttSubscriptionManager::topicMatches(const std::string& filter, const std::string& topic) const {
+bool MqttSubscriptionManager::topicMatches(std::string_view filter, std::string_view topic) const {
     // 如果过滤器就是主题，直接匹配
     if (filter == topic) {
         return true;
     }
     
     // 如果过滤器不包含通配符，不匹配
-    if (filter.find('+') == std::string::npos && filter.find('#') == std::string::npos) {
+    if (filter.find('+') == std::string_view::npos && filter.find('#') == std::string_view::npos) {
         return false;
     }
     
-    // 分割过滤器和主题为级别
-    std::vector<std::string> filterLevels;
-    std::vector<std::string> topicLevels;
+    // 使用 string_view 逐级匹配而不分配临时字符串
+    std::string_view filterView = filter;
+    std::string_view topicView = topic;
     
-    // 分割过滤器
-    size_t pos = 0;
-    std::string filterCopy = filter;
-    while ((pos = filterCopy.find('/')) != std::string::npos) {
-        filterLevels.push_back(filterCopy.substr(0, pos));
-        filterCopy = filterCopy.substr(pos + 1);
-    }
-    if (!filterCopy.empty()) {
-        filterLevels.push_back(filterCopy);
-    }
-    
-    // 分割主题
-    pos = 0;
-    std::string topicCopy = topic;
-    while ((pos = topicCopy.find('/')) != std::string::npos) {
-        topicLevels.push_back(topicCopy.substr(0, pos));
-        topicCopy = topicCopy.substr(pos + 1);
-    }
-    if (!topicCopy.empty()) {
-        topicLevels.push_back(topicCopy);
-    }
-    
-    // 匹配算法
-    size_t filterIdx = 0;
-    size_t topicIdx = 0;
-    
-    while (filterIdx < filterLevels.size() && topicIdx < topicLevels.size()) {
-        const std::string& filterLevel = filterLevels[filterIdx];
-        const std::string& topicLevel = topicLevels[topicIdx];
+    while (!filterView.empty() && !topicView.empty()) {
+        auto filterPos = filterView.find('/');
+        auto topicPos = topicView.find('/');
+        
+        std::string_view filterLevel = (filterPos == std::string_view::npos)
+            ? filterView
+            : filterView.substr(0, filterPos);
+        std::string_view topicLevel = (topicPos == std::string_view::npos)
+            ? topicView
+            : topicView.substr(0, topicPos);
         
         if (filterLevel == "#") {
             // 多级通配符，匹配剩余所有级别
             return true;
         } else if (filterLevel == "+") {
             // 单级通配符，匹配当前级别，继续下一级
-            filterIdx++;
-            topicIdx++;
+            if (filterPos == std::string_view::npos) {
+                filterView = std::string_view{};
+            } else {
+                filterView.remove_prefix(filterPos + 1);
+            }
+            if (topicPos == std::string_view::npos) {
+                topicView = std::string_view{};
+            } else {
+                topicView.remove_prefix(topicPos + 1);
+            }
         } else if (filterLevel == topicLevel) {
             // 精确匹配，继续下一级
-            filterIdx++;
-            topicIdx++;
+            if (filterPos == std::string_view::npos) {
+                filterView = std::string_view{};
+            } else {
+                filterView.remove_prefix(filterPos + 1);
+            }
+            if (topicPos == std::string_view::npos) {
+                topicView = std::string_view{};
+            } else {
+                topicView.remove_prefix(topicPos + 1);
+            }
         } else {
             // 不匹配
             return false;
         }
     }
     
-    // 如果过滤器还有剩余，检查是否是单级通配符
-    if (filterIdx < filterLevels.size()) {
-        if (filterLevels[filterIdx] == "+" && topicIdx == topicLevels.size()) {
-            // 单级通配符匹配空级别
+    // 处理剩余的过滤器和主题级别
+    if (!filterView.empty()) {
+        // 如果剩余的是单级通配符并且主题已经结束，匹配
+        if (filterView == "+" && topicView.empty()) {
             return true;
         }
         return false;
     }
     
-    // 如果主题还有剩余，不匹配（除非过滤器以#结尾）
-    if (topicIdx < topicLevels.size()) {
-        return false;
-    }
-    
-    // 完全匹配
-    return true;
+    // 如果主题还有剩余，不匹配（除非过滤器以#结尾，
+    // 但这种情况在上面的循环中已被处理）
+    return topicView.empty();
 }
 
-bool MqttSubscriptionManager::validateTopicFilter(const std::string& topic) const {
+bool MqttSubscriptionManager::validateTopicFilter(std::string_view topic) const {
     // 检查空主题
     if (topic.empty()) {
         return false;

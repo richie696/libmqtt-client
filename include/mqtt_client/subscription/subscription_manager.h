@@ -13,10 +13,11 @@
 #include "mqtt_client/core/error.h"
 #include "mqtt_client/config/config.h"
 #include <string>
+#include <string_view>
 #include <unordered_map>
 #include <vector>
 #include <functional>
-#include <mutex>
+#include <shared_mutex>
 #include <ctime>
 
 namespace mqtt_client {
@@ -27,8 +28,8 @@ class MqttConnectionManager;
 /**
  * @brief 消息回调函数类型
  */
-using MessageCallback = std::function<void(const std::string& topic,
-                                           const std::string& payload,
+using MessageCallback = std::function<void(std::string_view topic,
+                                           std::string_view payload,
                                            const MqttProperties& properties)>;
 
 /**
@@ -74,9 +75,9 @@ public:
      * @param qos QoS等级
      * @return Result<bool> 订阅结果
      */
-    Result<bool> subscribe(const std::string& topic,
-                         MessageCallback callback,
-                         QoS qos = QoS::QOS_0);
+    [[nodiscard]] Result<bool> subscribe(std::string_view topic,
+                                         MessageCallback callback,
+                                         QoS qos = QoS::QOS_0);
     
     /**
      * @brief 取消订阅
@@ -84,7 +85,7 @@ public:
      * @param topic 主题
      * @return Result<bool> 取消订阅结果
      */
-    Result<bool> unsubscribe(const std::string& topic);
+    [[nodiscard]] Result<bool> unsubscribe(std::string_view topic);
     
     /**
      * @brief 取消所有订阅
@@ -96,7 +97,7 @@ public:
      * 
      * @return Result<bool> 恢复结果
      */
-    Result<bool> resubscribeAll();
+    [[nodiscard]] Result<bool> resubscribeAll();
     
     /**
      * @brief 分发消息
@@ -107,8 +108,8 @@ public:
      * @param payload 消息内容
      * @param properties MQTT 5.0属性（可选）
      */
-    void dispatchMessage(const std::string& topic,
-                        const std::string& payload,
+    void dispatchMessage(std::string_view topic,
+                        std::string_view payload,
                         const MqttProperties& properties = MqttProperties());
     
     /**
@@ -118,21 +119,21 @@ public:
      * @return true 已订阅
      * @return false 未订阅
      */
-    bool isSubscribed(const std::string& topic) const;
+    [[nodiscard]] bool isSubscribed(std::string_view topic) const;
     
     /**
      * @brief 获取所有已订阅的主题
      * 
      * @return std::vector<std::string> 主题列表
      */
-    std::vector<std::string> getSubscribedTopics() const;
+    [[nodiscard]] std::vector<std::string> getSubscribedTopics() const;
     
     /**
      * @brief 获取订阅数量
      * 
      * @return size_t 订阅数量
      */
-    size_t getSubscriptionCount() const;
+    [[nodiscard]] size_t getSubscriptionCount() const;
     
     /**
      * @brief 保存订阅信息（用于持久化）
@@ -142,9 +143,9 @@ public:
      * @param qos QoS等级
      * @return Result<bool> 保存结果
      */
-    Result<bool> saveSubscription(const std::string& topic,
-                                  MessageCallback callback,
-                                  QoS qos);
+    [[nodiscard]] Result<bool> saveSubscription(std::string_view topic,
+                                                MessageCallback callback,
+                                                QoS qos);
 
 private:
     /**
@@ -159,7 +160,7 @@ private:
      * @return true 匹配
      * @return false 不匹配
      */
-    bool topicMatches(const std::string& filter, const std::string& topic) const;
+    bool topicMatches(std::string_view filter, std::string_view topic) const;
     
     /**
      * @brief 验证主题过滤器
@@ -168,7 +169,7 @@ private:
      * @return true 有效
      * @return false 无效
      */
-    bool validateTopicFilter(const std::string& topic) const;
+    bool validateTopicFilter(std::string_view topic) const;
     
     // 连接管理器
     MqttConnectionManager& connectionManager_;
@@ -179,8 +180,8 @@ private:
     // 订阅缓存（主题 -> 订阅信息）
     std::unordered_map<std::string, Subscription> subscriptions_;
     
-    // 线程安全
-    mutable std::mutex mutex_;
+    // 线程安全（使用读写锁：读操作多，写操作少）
+    mutable std::shared_mutex mutex_;
 };
 
 } // namespace mqtt_client

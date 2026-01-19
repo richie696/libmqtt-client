@@ -40,7 +40,7 @@ struct MessageState {
     std::chrono::steady_clock::time_point receiveTime;  // 消息接收时间
     
     void reset() {
-        std::lock_guard<std::mutex> lock(mutex);
+        std::lock_guard lock(mutex);
         receivedMessages.clear();
         messageReceived = false;
         expectedCount = 0;
@@ -80,7 +80,7 @@ MqttConfig createTlsConfig() {
 // 消息回调
 void onMessage(MessageState* state, const std::string& topic, const std::string& payload, 
                const MqttProperties& /*properties*/) {
-    std::lock_guard<std::mutex> lock(state->mutex);
+    std::lock_guard lock(state->mutex);
     state->receivedMessages.push_back({topic, payload});
     state->receivedCount++;
     state->messageReceived = true;
@@ -91,7 +91,7 @@ void onMessage(MessageState* state, const std::string& topic, const std::string&
 
 // 等待消息接收
 bool waitForMessages(MessageState* state, int timeoutSeconds = 10) {
-    std::unique_lock<std::mutex> lock(state->mutex);
+    std::unique_lock lock(state->mutex);
     return state->cv.wait_for(lock, std::chrono::seconds(timeoutSeconds), 
                               [state] { 
                                   return state->receivedCount >= state->expectedCount; 
@@ -180,7 +180,7 @@ bool testTcpQoS(QoS qos) {
     std::vector<std::pair<std::string, std::string>> receivedMsgs;
     std::chrono::steady_clock::time_point receiveTime;
     {
-        std::lock_guard<std::mutex> lock(msgState.mutex);
+        std::lock_guard lock(msgState.mutex);
         receivedCount = msgState.receivedMessages.size();
         receivedMsgs = msgState.receivedMessages;
         receiveTime = msgState.receiveTime;
@@ -285,7 +285,7 @@ bool testTlsQoS(QoS qos) {
     std::vector<std::pair<std::string, std::string>> receivedMsgs;
     std::chrono::steady_clock::time_point receiveTime;
     {
-        std::lock_guard<std::mutex> lock(msgState.mutex);
+        std::lock_guard lock(msgState.mutex);
         receivedCount = msgState.receivedMessages.size();
         receivedMsgs = msgState.receivedMessages;
         receiveTime = msgState.receiveTime;

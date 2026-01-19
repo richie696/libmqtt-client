@@ -10,7 +10,7 @@
 #define MQTT_CLIENT_LOGGER_LOGGER_INTERFACE_H
 
 #include "mqtt_client/core/types.h"
-#include <string>
+#include <string_view>
 #include <memory>
 #include <mutex>
 
@@ -36,10 +36,10 @@ public:
      * @param message 日志消息
      */
     virtual void log(LogLevel level,
-                     const std::string& file,
+                     std::string_view file,
                      int line,
-                     const std::string& function,
-                     const std::string& message) = 0;
+                     std::string_view function,
+                     std::string_view message) = 0;
     
     /**
      * @brief 刷新日志缓冲区
@@ -60,7 +60,7 @@ public:
      * 
      * @return LogLevel 当前日志级别
      */
-    virtual LogLevel getLevel() const = 0;
+    [[nodiscard]] virtual LogLevel getLevel() const = 0;
     
     /**
      * @brief 关闭日志（清理资源）
@@ -92,7 +92,7 @@ public:
      * 
      * @param logger 日志器实例（使用shared_ptr管理生命周期）
      */
-    void setLogger(std::shared_ptr<ILogger> logger);
+    void setLogger(const std::shared_ptr<ILogger> &logger);
     
     /**
      * @brief 获取当前日志器
@@ -113,15 +113,15 @@ public:
      * @param message 日志消息
      */
     void log(LogLevel level,
-             const std::string& file,
+             std::string_view file,
              int line,
-             const std::string& function,
-             const std::string& message);
+             std::string_view function,
+             std::string_view message) const;
     
     /**
      * @brief 刷新日志
      */
-    void flush();
+    void flush() const;
     
     /**
      * @brief 检查是否有日志器
@@ -130,6 +130,17 @@ public:
      * @return false 未设置日志器
      */
     bool hasLogger() const;
+    
+    /**
+     * @brief 快速检查日志级别（无锁，用于性能优化）
+     * 
+     * 用于日志宏中快速检查是否应该记录日志，避免不必要的字符串构造
+     * 
+     * @param level 日志级别
+     * @return true 应该记录
+     * @return false 不需要记录
+     */
+    [[nodiscard]] bool shouldLog(LogLevel level) const;
 
 private:
     LoggerManager() = default;
@@ -143,29 +154,60 @@ private:
 
 } // namespace mqtt_client
 
-// 便捷日志宏
+// 便捷日志宏（性能优化：延迟求值，只在日志级别满足时才构造字符串）
+// 使用 shouldLog 快速检查，避免在日志级别关闭时构造字符串参数
 #define LOG_TRACE(msg) \
-    mqtt_client::LoggerManager::getInstance().log( \
-        mqtt_client::LogLevel::TRACE, __FILE__, __LINE__, __FUNCTION__, msg)
+    do { \
+        auto& loggerMgr = mqtt_client::LoggerManager::getInstance(); \
+        if (loggerMgr.shouldLog(mqtt_client::LogLevel::TRACE)) { \
+            loggerMgr.log(mqtt_client::LogLevel::TRACE, __FILE__, __LINE__, __FUNCTION__, \
+                [&]() -> std::string { return std::string(msg); }()); \
+        } \
+    } while(0)
 
 #define LOG_DEBUG(msg) \
-    mqtt_client::LoggerManager::getInstance().log( \
-        mqtt_client::LogLevel::DEBUG, __FILE__, __LINE__, __FUNCTION__, msg)
+    do { \
+        auto& loggerMgr = mqtt_client::LoggerManager::getInstance(); \
+        if (loggerMgr.shouldLog(mqtt_client::LogLevel::DEBUG)) { \
+            loggerMgr.log(mqtt_client::LogLevel::DEBUG, __FILE__, __LINE__, __FUNCTION__, \
+                [&]() -> std::string { return std::string(msg); }()); \
+        } \
+    } while(0)
 
 #define LOG_INFO(msg) \
-    mqtt_client::LoggerManager::getInstance().log( \
-        mqtt_client::LogLevel::INFO, __FILE__, __LINE__, __FUNCTION__, msg)
+    do { \
+        auto& loggerMgr = mqtt_client::LoggerManager::getInstance(); \
+        if (loggerMgr.shouldLog(mqtt_client::LogLevel::INFO)) { \
+            loggerMgr.log(mqtt_client::LogLevel::INFO, __FILE__, __LINE__, __FUNCTION__, \
+                [&]() -> std::string { return std::string(msg); }()); \
+        } \
+    } while(0)
 
 #define LOG_WARN(msg) \
-    mqtt_client::LoggerManager::getInstance().log( \
-        mqtt_client::LogLevel::WARN, __FILE__, __LINE__, __FUNCTION__, msg)
+    do { \
+        auto& loggerMgr = mqtt_client::LoggerManager::getInstance(); \
+        if (loggerMgr.shouldLog(mqtt_client::LogLevel::WARN)) { \
+            loggerMgr.log(mqtt_client::LogLevel::WARN, __FILE__, __LINE__, __FUNCTION__, \
+                [&]() -> std::string { return std::string(msg); }()); \
+        } \
+    } while(0)
 
 #define LOG_ERROR(msg) \
-    mqtt_client::LoggerManager::getInstance().log( \
-        mqtt_client::LogLevel::ERROR, __FILE__, __LINE__, __FUNCTION__, msg)
+    do { \
+        auto& loggerMgr = mqtt_client::LoggerManager::getInstance(); \
+        if (loggerMgr.shouldLog(mqtt_client::LogLevel::ERROR)) { \
+            loggerMgr.log(mqtt_client::LogLevel::ERROR, __FILE__, __LINE__, __FUNCTION__, \
+                [&]() -> std::string { return std::string(msg); }()); \
+        } \
+    } while(0)
 
 #define LOG_FATAL(msg) \
-    mqtt_client::LoggerManager::getInstance().log( \
-        mqtt_client::LogLevel::FATAL, __FILE__, __LINE__, __FUNCTION__, msg)
+    do { \
+        auto& loggerMgr = mqtt_client::LoggerManager::getInstance(); \
+        if (loggerMgr.shouldLog(mqtt_client::LogLevel::FATAL)) { \
+            loggerMgr.log(mqtt_client::LogLevel::FATAL, __FILE__, __LINE__, __FUNCTION__, \
+                [&]() -> std::string { return std::string(msg); }()); \
+        } \
+    } while(0)
 
 #endif // MQTT_CLIENT_LOGGER_LOGGER_INTERFACE_H

@@ -9,6 +9,8 @@
 #include <chrono>
 #include <algorithm>
 
+using namespace std::chrono_literals;
+
 namespace mqtt_client {
 
 ConnectionMonitor::ConnectionMonitor(MqttConnectionManager& connectionManager,
@@ -68,7 +70,7 @@ bool ConnectionMonitor::isRunning() const {
 
 ConnectionMonitor::ConnectionStats ConnectionMonitor::getStats() const {
     // 使用try_lock避免在析构时死锁
-    std::unique_lock<std::mutex> lock(mutex_, std::try_to_lock);
+    std::unique_lock lock(mutex_, std::try_to_lock);
     if (lock.owns_lock()) {
         return stats_;
     }
@@ -79,7 +81,7 @@ ConnectionMonitor::ConnectionStats ConnectionMonitor::getStats() const {
 
 void ConnectionMonitor::setOnDisconnected(std::function<void()> callback) {
     // 使用try_lock避免在析构时死锁
-    std::unique_lock<std::mutex> lock(mutex_, std::try_to_lock);
+    std::unique_lock lock(mutex_, std::try_to_lock);
     if (lock.owns_lock()) {
         onDisconnected_ = callback;
     }
@@ -98,7 +100,7 @@ void ConnectionMonitor::monitorThread() {
         }
         
         // 使用try_lock避免在析构时死锁
-        std::unique_lock<std::mutex> lock(mutex_, std::try_to_lock);
+        std::unique_lock lock(mutex_, std::try_to_lock);
         if (lock.owns_lock()) {
             // 检测连接状态变化
             bool wasConnected = lastConnectedState_;
@@ -128,8 +130,13 @@ void ConnectionMonitor::monitorThread() {
         }
         
         // 等待下次检查（使用可中断的sleep，避免长时间阻塞）
-        for (int i = 0; i < checkInterval_ * 10 && running_.load(); ++i) {
-            std::this_thread::sleep_for(std::chrono::milliseconds(100));
+        // 使用 C++17 chrono duration 表达时间间隔，更语义化
+        const auto checkDuration = std::chrono::seconds(checkInterval_);
+        const auto sleepInterval = 100ms;
+        auto elapsed = 0ms;
+        while (elapsed < checkDuration && running_.load()) {
+            std::this_thread::sleep_for(sleepInterval);
+            elapsed += sleepInterval;
         }
     }
 }
@@ -168,7 +175,7 @@ void ConnectionMonitor::updateStatsUnlocked(bool connected) {
 
 void ConnectionMonitor::updateStats(bool connected) {
     // 使用try_lock避免在析构时死锁
-    std::unique_lock<std::mutex> lock(mutex_, std::try_to_lock);
+    std::unique_lock lock(mutex_, std::try_to_lock);
     if (lock.owns_lock()) {
         updateStatsUnlocked(connected);
     }

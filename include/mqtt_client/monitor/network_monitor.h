@@ -14,7 +14,11 @@
 #include <thread>
 #include <mutex>
 #include <functional>
+#include <deque>
+#include <algorithm>
+#include <numeric>
 #include <ctime>
+#include <chrono>
 
 namespace mqtt_client {
 
@@ -43,7 +47,7 @@ public:
      * @param port 服务器端口
      * @param checkInterval 检查间隔（秒）
      */
-    explicit NetworkMonitor(const std::string& host, int port, int checkInterval = 5);
+    explicit NetworkMonitor(std::string  host, int port, int checkInterval = 5);
     
     /**
      * @brief 析构函数
@@ -70,7 +74,7 @@ public:
      * @return true 正在运行
      * @return false 未运行
      */
-    bool isRunning() const;
+    [[nodiscard]] bool isRunning() const;
     
     /**
      * @brief 检查网络是否可用
@@ -78,42 +82,42 @@ public:
      * @return true 网络可用
      * @return false 网络不可用
      */
-    bool isNetworkAvailable() const;
+    [[nodiscard]] bool isNetworkAvailable() const;
     
     /**
      * @brief 获取网络统计信息
      * 
      * @return NetworkStats 统计信息
      */
-    NetworkStats getStats() const;
+    [[nodiscard]] NetworkStats getStats() const;
     
     /**
      * @brief 获取网络质量
      * 
      * @return NetworkQuality 网络质量
      */
-    NetworkQuality getQuality() const;
+    [[nodiscard]] NetworkQuality getQuality() const;
     
     /**
      * @brief 设置网络恢复回调
      * 
      * @param callback 回调函数
      */
-    void setOnNetworkRecovered(std::function<void()> callback);
+    void setOnNetworkRecovered(const std::function<void()> &callback);
     
     /**
      * @brief 设置网络丢失回调
      * 
      * @param callback 回调函数
      */
-    void setOnNetworkLost(std::function<void()> callback);
+    void setOnNetworkLost(const std::function<void()> &callback);
     
     /**
      * @brief 设置网络质量变化回调
      * 
      * @param callback 回调函数
      */
-    void setOnQualityChanged(std::function<void(NetworkQuality)> callback);
+    void setOnQualityChanged(const std::function<void(NetworkQuality)> &callback);
 
 private:
     /**
@@ -134,7 +138,7 @@ private:
      * 
      * @return long 延迟（毫秒），-1表示失败
      */
-    long measureLatency();
+    long measureLatency() const;
     
     /**
      * @brief 更新统计信息
@@ -150,7 +154,7 @@ private:
      * @param stats 统计信息
      * @return NetworkQuality 网络质量
      */
-    NetworkQuality calculateQuality(const NetworkStats& stats) const;
+    static NetworkQuality calculateQuality(const NetworkStats& stats);
     
     std::string host_;              ///< 服务器地址
     int port_;                      ///< 服务器端口
@@ -162,6 +166,13 @@ private:
     mutable std::mutex mutex_;      ///< 互斥锁
     NetworkStats stats_;            ///< 统计信息
     NetworkQuality lastQuality_;    ///< 上次网络质量
+    
+    // 延迟平滑和丢包率计算所需的历史数据
+    static constexpr size_t LATENCY_HISTORY_SIZE = 10;  ///< 延迟历史记录大小
+    static constexpr size_t PACKET_LOSS_WINDOW_SIZE = 20;  ///< 丢包率计算窗口大小
+    std::deque<long> latencyHistory_;  ///< 延迟历史记录（用于平滑，使用 deque 提高效率）
+    std::deque<bool> connectivityHistory_;  ///< 连通性历史记录（用于丢包率计算，使用 deque 提高效率）
+    size_t failedChecksCount_ = 0;  ///< 失败次数计数器（用于快速计算丢包率）
     
     std::thread monitorThread_;     ///< 监控线程
     

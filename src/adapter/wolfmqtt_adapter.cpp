@@ -6,11 +6,17 @@
 #include "mqtt_client/adapter/wolfmqtt_adapter.h"
 #include "mqtt_client/logger/logger_interface.h"
 #include "mqtt_client/core/error.h"
-#include <cstring>
 #include <algorithm>
 #include <atomic>
 #include <chrono>
 #include <thread>
+#include <fmt/format-inl.h>
+
+#ifdef ENABLE_FMT
+#include <fmt/core.h>
+#endif
+
+using namespace std::chrono_literals;
 
 #ifdef WOLFMQTT_ENABLED
 #ifdef _WIN32
@@ -23,7 +29,7 @@
     #include <netdb.h>
     #include <sys/select.h>
     #include <unistd.h>
-    #include <errno.h>
+    #include <cerrno>
 #endif
 
 // wolfSSL头文件（如果启用TLS）
@@ -37,7 +43,8 @@ namespace mqtt_client {
 
 // 静态变量用于存储适配器实例（用于消息回调）
 // 注意：必须在namespace内，但在类定义之前
-static thread_local WolfMqttAdapter* g_currentAdapter = nullptr;
+// 在 .cpp 文件中，thread_local 不需要 static（thread_local 本身就有内部链接）
+thread_local WolfMqttAdapter* g_currentAdapter = nullptr;
 
 #ifdef WOLFMQTT_ENABLED
 #ifdef ENABLE_MQTT_TLS
@@ -56,12 +63,12 @@ static int tlsCallback(::MqttClient* client) {
     }
     
     // 如果已经配置了TLS上下文，直接返回成功
-    if (client->tls.ctx != NULL) {
+    if (client->tls.ctx != nullptr) {
         return WOLFSSL_SUCCESS;
     }
     
     // 初始化wolfSSL库
-    int rc = wolfSSL_Init();
+    const int rc = wolfSSL_Init();
     if (rc != WOLFSSL_SUCCESS) {
         LOG_ERROR("wolfSSL初始化失败: " + std::to_string(rc));
         return WOLFSSL_FAILURE;
@@ -69,14 +76,14 @@ static int tlsCallback(::MqttClient* client) {
     
     // 创建wolfSSL上下文（使用最高可用版本，允许降级）
     client->tls.ctx = wolfSSL_CTX_new(wolfSSLv23_client_method());
-    if (client->tls.ctx == NULL) {
+    if (client->tls.ctx == nullptr) {
         LOG_ERROR("创建wolfSSL上下文失败");
         return WOLFSSL_FAILURE;
     }
     
     // 设置验证模式：不验证证书（用于测试，生产环境应验证证书）
     // 注意：这里使用 WOLFSSL_VERIFY_NONE 是因为测试服务器可能使用自签名证书
-    wolfSSL_CTX_set_verify(client->tls.ctx, WOLFSSL_VERIFY_NONE, NULL);
+    wolfSSL_CTX_set_verify(client->tls.ctx, WOLFSSL_VERIFY_NONE, nullptr);
     
     LOG_INFO("TLS上下文配置成功（不验证证书模式）");
     
@@ -84,8 +91,7 @@ static int tlsCallback(::MqttClient* client) {
 }
 #else
 // 如果未启用TLS支持，提供一个空回调
-static int tlsCallback(::MqttClient* client) {
-    (void)client;
+static int tlsCallback([[maybe_unused]] ::MqttClient* client) {
     LOG_WARN("TLS回调被调用，但wolfMQTT未启用TLS支持");
     return 0;  // 返回0表示不支持TLS
 }
@@ -94,9 +100,9 @@ static int tlsCallback(::MqttClient* client) {
 
 WolfMqttAdapter::WolfMqttAdapter(const MqttConfig& config)
     : config_(config)
+    , messageThreadRunning_(false)
     , connected_(false)
     , initialized_(false)
-    , messageThreadRunning_(false)
 {
 #ifdef WOLFMQTT_ENABLED
     // 初始化网络上下文
@@ -122,7 +128,7 @@ WolfMqttAdapter::~WolfMqttAdapter() {
 }
 
 Result<bool> WolfMqttAdapter::initialize() {
-    std::lock_guard<std::mutex> lock(mutex_);
+    std::lock_guard lock(mutex_);
     
     if (initialized_.load()) {
         return Result<bool>::Success(true);
@@ -145,7 +151,7 @@ Result<bool> WolfMqttAdapter::initialize() {
 }
 
 Result<bool> WolfMqttAdapter::connect() {
-    std::lock_guard<std::mutex> lock(mutex_);
+    std::lock_guard lock(mutex_);
     
     if (!initialized_.load()) {
         return Result<bool>::Failure(
@@ -241,44 +247,44 @@ Result<bool> WolfMqttAdapter::connect() {
         if (rc == MQTT_CODE_SUCCESS) {
             LOG_INFO("MQTT连接成功，重试次数: " + std::to_string(retryCount));
             break;  // 连接成功
-        } else if (rc == MQTT_CODE_CONTINUE) {
+        }
+        if (rc == MQTT_CODE_CONTINUE) {
             // 需要继续调用，等待一下再重试（TLS握手可能需要多次往返）
             // 对于TLS连接，CONTINUE是正常的，需要继续调用
-            std::this_thread::sleep_for(std::chrono::milliseconds(10));  // 减少等待时间
+            std::this_thread::sleep_for(10ms);  // 减少等待时间
             retryCount++;
             continue;
-        } else if (rc == MQTT_CODE_ERROR_TIMEOUT) {
+        }
+        if (rc == MQTT_CODE_ERROR_TIMEOUT) {
             // TIMEOUT不应该无限重试，检查是否超过总超时时间
             // 如果还没超过，可以再试一次
             if (elapsedMs < totalTimeoutMs - 1000) {  // 至少留1秒余量
-                LOG_DEBUG("MQTT连接超时，重试中... (重试 " + std::to_string(retryCount) + "/" + 
-                         std::to_string(maxRetries) + ")");
-                std::this_thread::sleep_for(std::chrono::milliseconds(100));
+                LOG_DEBUG("MQTT连接超时，重试中... (重试 " + std::to_string(retryCount) + "/" +
+                    std::to_string(maxRetries) + ")");
+                std::this_thread::sleep_for(100ms);
                 retryCount++;
                 continue;
-            } else {
-                // 接近总超时时间，直接失败
-                LOG_ERROR("MQTT连接超时，接近总超时时间");
-                MqttClient_NetDisconnect(wolfClient_.get());
-                g_currentAdapter = nullptr;
-                return Result<bool>::Failure(
-                    MqttError(MqttErrorCode::CONNECTION_REFUSED,
-                             "MQTT连接失败: 超时 (接近总超时时间 " + std::to_string(totalTimeoutMs) + "ms)"));
             }
-        } else {
-            // 其他错误，直接失败
+            // 接近总超时时间，直接失败
+            LOG_ERROR("MQTT连接超时，接近总超时时间");
             MqttClient_NetDisconnect(wolfClient_.get());
             g_currentAdapter = nullptr;
-            // 获取错误描述
-            const char* errorStr = "未知错误";
-            #ifdef WOLFMQTT_ENABLED
-            errorStr = MqttClient_ReturnCodeToString(rc);
-            #endif
             return Result<bool>::Failure(
                 MqttError(MqttErrorCode::CONNECTION_REFUSED,
-                         "MQTT连接失败: " + std::to_string(rc) + 
-                         " (" + std::string(errorStr) + ")"));
+                          "MQTT连接失败: 超时 (接近总超时时间 " + std::to_string(totalTimeoutMs) + "ms)"));
         }
+        // 其他错误，直接失败
+        MqttClient_NetDisconnect(wolfClient_.get());
+        g_currentAdapter = nullptr;
+        // 获取错误描述
+        std::string errorStr = "未知错误";
+#ifdef WOLFMQTT_ENABLED
+        errorStr = MqttClient_ReturnCodeToString(rc);
+#endif
+        return Result<bool>::Failure(
+            MqttError(MqttErrorCode::CONNECTION_REFUSED,
+                      "MQTT连接失败: " + std::to_string(rc) +
+                      " (" + std::string(errorStr) + ")"));
     }
     
     if (rc != MQTT_CODE_SUCCESS) {
@@ -312,7 +318,7 @@ Result<bool> WolfMqttAdapter::connect() {
 }
 
 Result<bool> WolfMqttAdapter::disconnect() {
-    std::unique_lock<std::mutex> lock(mutex_);
+    std::unique_lock lock(mutex_);
     
     if (!connected_.load()) {
         return Result<bool>::Success(true);
@@ -335,8 +341,7 @@ Result<bool> WolfMqttAdapter::disconnect() {
 #ifdef WOLFMQTT_ENABLED
     if (wolfClient_) {
         // 先发送MQTT断开包
-        int rc = MqttClient_Disconnect(wolfClient_.get());
-        if (rc != MQTT_CODE_SUCCESS) {
+        if (const int rc = MqttClient_Disconnect(wolfClient_.get()); rc != MQTT_CODE_SUCCESS) {
             // 即使断开失败，也标记为已断开
             LOG_WARN("MQTT断开时出错: " + std::to_string(rc));
         }
@@ -370,10 +375,10 @@ bool WolfMqttAdapter::isConnected() const {
     return connected_.load();
 }
 
-Result<bool> WolfMqttAdapter::publish(const std::string& topic,
-                                     const std::string& payload,
+Result<bool> WolfMqttAdapter::publish(std::string_view topic,
+                                     const std::string_view payload,
                                      QoS qos,
-                                     bool retained) {
+                                     const bool retained) {
     // 先检查连接状态（不加锁，避免阻塞）
     if (!connected_.load()) {
         return Result<bool>::Failure(
@@ -391,11 +396,13 @@ Result<bool> WolfMqttAdapter::publish(const std::string& topic,
     // 保存topic和payload的副本，确保在publish期间有效
     // 注意：这里使用const_cast是因为wolfMQTT的API需要非const指针
     // 但实际不会修改内容
-    publish.topic_name = const_cast<char*>(topic.c_str());
-    publish.topic_name_len = static_cast<word16>(topic.length());
-    publish.buffer = reinterpret_cast<byte*>(const_cast<char*>(payload.c_str()));
-    publish.buffer_len = static_cast<word32>(payload.length());
-    publish.total_len = static_cast<word32>(payload.length());
+    std::string topicStr(topic);
+    std::string payloadStr(payload);
+    publish.topic_name = const_cast<char*>(topicStr.c_str());
+    publish.topic_name_len = static_cast<word16>(topicStr.length());
+    publish.buffer = reinterpret_cast<byte*>(const_cast<char*>(payloadStr.c_str()));
+    publish.buffer_len = static_cast<word32>(payloadStr.length());
+    publish.total_len = static_cast<word32>(payloadStr.length());
     publish.qos = static_cast<MqttQoS>(qos);
     publish.retain = retained ? 1 : 0;
     publish.duplicate = 0;
@@ -409,17 +416,16 @@ Result<bool> WolfMqttAdapter::publish(const std::string& topic,
         publish.packet_id = 0;
     }
     
-    LOG_INFO("准备发布消息: Topic=" + topic + 
-            ", Payload长度=" + std::to_string(payload.length()) + 
+    LOG_INFO("准备发布消息: Topic=" + topicStr + 
+            ", Payload长度=" + std::to_string(payloadStr.length()) + 
             ", QoS=" + std::to_string(static_cast<int>(qos)) + 
             ", PacketID=" + std::to_string(publish.packet_id));
     
     // 获取锁并发布（锁持有时间尽可能短）
     // 注意：对于QoS > 0，MqttClient_Publish会等待PUBLISH_ACK
     // 这可能会阻塞，但这是wolfMQTT的正常行为
-    int rc;
     {
-        std::lock_guard<std::mutex> lock(mutex_);
+        std::lock_guard lock(mutex_);
         
         // 再次检查连接状态（加锁后）
         if (!connected_.load() || !wolfClient_) {
@@ -440,7 +446,7 @@ Result<bool> WolfMqttAdapter::publish(const std::string& topic,
             // MqttClient_Publish在QoS > 0时会调用MqttClient_WaitType等待PUBACK
             // 这会调用networkRecv，可能与messageReceiveThread冲突
             // 但wolfMQTT使用内部状态机处理，应该能正常工作
-            rc = MqttClient_Publish(wolfClient_.get(), &publish);
+            int rc = MqttClient_Publish(wolfClient_.get(), &publish);
             
             LOG_INFO("MqttClient_Publish返回: " + std::to_string(rc) + 
                      " (QoS: " + std::to_string(static_cast<int>(qos)) + 
@@ -456,20 +462,19 @@ Result<bool> WolfMqttAdapter::publish(const std::string& topic,
             // 等待一段时间，让 messageReceiveThread 接收 PUBACK
             if (rc == MQTT_CODE_CONTINUE && qos > QoS::QOS_0) {
                 LOG_INFO("发布返回 CONTINUE，等待 PUBACK 被接收...");
-                // 等待最多 1 秒，让 messageReceiveThread 接收 PUBACK
-                std::this_thread::sleep_for(std::chrono::milliseconds(500));
+                // 等待最多 0.5 秒，让 messageReceiveThread 接收 PUBACK
+                std::this_thread::sleep_for(500ms);
                 // 假设发布成功（因为 PUBACK 已经被 messageReceiveThread 接收）
                 // 实际应用中，应该使用更可靠的方法来验证发布状态
-                rc = MQTT_CODE_SUCCESS;
                 LOG_INFO("假设发布成功（PUBACK 已由 messageReceiveThread 接收）");
-                break;
+                return Result<bool>::Success(true);
             }
             
             // 检查是否成功
             if (rc != MQTT_CODE_SUCCESS) {
                 LOG_ERROR("发布失败: " + std::to_string(rc) + 
                          " (QoS: " + std::to_string(static_cast<int>(qos)) + 
-                         ", Topic: " + topic + 
+                         ", Topic: " + topicStr + 
                          ", PacketID: " + std::to_string(publish.packet_id) + ")");
                 // 如果是网络错误或超时，可能连接已断开
                 if (rc == MQTT_CODE_ERROR_NETWORK || rc == MQTT_CODE_ERROR_TIMEOUT) {
@@ -480,8 +485,8 @@ Result<bool> WolfMqttAdapter::publish(const std::string& topic,
                              "发布失败: " + std::to_string(rc)));
             }
             
-            LOG_INFO("发布成功 (Topic: " + topic + 
-                    ", Payload长度: " + std::to_string(payload.length()) + 
+        LOG_INFO("发布成功 (Topic: " + topicStr + 
+                ", Payload长度: " + std::to_string(payloadStr.length()) + 
                     ", PacketID: " + std::to_string(publish.packet_id) + 
                     ", 已收到ACK)");
             break;
@@ -500,8 +505,8 @@ Result<bool> WolfMqttAdapter::publish(const std::string& topic,
 #endif
 }
 
-Result<bool> WolfMqttAdapter::subscribe(const std::string& topic, QoS qos) {
-    std::lock_guard<std::mutex> lock(mutex_);
+Result<bool> WolfMqttAdapter::subscribe(std::string_view topic, QoS qos) {
+    std::lock_guard lock(mutex_);
     
     if (!connected_.load()) {
         return Result<bool>::Failure(
@@ -521,12 +526,13 @@ Result<bool> WolfMqttAdapter::subscribe(const std::string& topic, QoS qos) {
     subscribe.topic_count = 1;
     
     MqttTopic topics[1];
-    topics[0].topic_filter = const_cast<char*>(topic.c_str());
+    const std::string topicStr(topic);
+    topics[0].topic_filter = const_cast<char*>(topicStr.c_str());
     topics[0].qos = static_cast<MqttQoS>(qos);
     
     subscribe.topics = topics;
     
-    LOG_INFO("准备订阅主题: " + topic + ", QoS=" + std::to_string(static_cast<int>(qos)) + 
+    LOG_INFO("准备订阅主题: " + topicStr + ", QoS=" + std::to_string(static_cast<int>(qos)) + 
             ", PacketID=" + std::to_string(subscribe.packet_id));
     
     // MqttClient_Subscribe 会等待 SUBACK
@@ -536,7 +542,7 @@ Result<bool> WolfMqttAdapter::subscribe(const std::string& topic, QoS qos) {
     int rc = MqttClient_Subscribe(wolfClient_.get(), &subscribe);
     
     LOG_INFO("MqttClient_Subscribe返回: " + std::to_string(rc) + 
-            " (Topic: " + topic + ", PacketID: " + std::to_string(subscribe.packet_id) + ")");
+            " (Topic: " + topicStr + ", PacketID: " + std::to_string(subscribe.packet_id) + ")");
     
     // 如果返回 CONTINUE，说明 SUBACK 可能被 messageReceiveThread 接收了
     // 等待一段时间，让 messageReceiveThread 接收 SUBACK
@@ -544,7 +550,7 @@ Result<bool> WolfMqttAdapter::subscribe(const std::string& topic, QoS qos) {
         LOG_INFO("订阅返回 CONTINUE，等待 SUBACK 被接收...");
         // 等待最多 2 秒，让 messageReceiveThread 接收 SUBACK
         // 注意：不要重复调用 MqttClient_Subscribe，这会导致重复发送 SUBSCRIBE 包
-        std::this_thread::sleep_for(std::chrono::milliseconds(500));
+        std::this_thread::sleep_for(500ms);
         
         // 检查订阅结果（SUBACK 中的返回码）
         // 如果 return_code 不是 0x80（失败），说明订阅可能成功
@@ -562,7 +568,7 @@ Result<bool> WolfMqttAdapter::subscribe(const std::string& topic, QoS qos) {
     }
     
     if (rc != MQTT_CODE_SUCCESS) {
-        LOG_ERROR("订阅失败: " + std::to_string(rc) + " (Topic: " + topic + ")");
+        LOG_ERROR("订阅失败: " + std::to_string(rc) + " (Topic: " + topicStr + ")");
         return Result<bool>::Failure(
             MqttError(MqttErrorCode::SUBSCRIBE_FAILED,
                      "订阅失败: " + std::to_string(rc)));
@@ -571,13 +577,13 @@ Result<bool> WolfMqttAdapter::subscribe(const std::string& topic, QoS qos) {
     // 检查订阅结果（SUBACK 中的返回码）
     if (subscribe.topics[0].return_code == 0x80) {
         // 0x80 表示订阅失败（服务器拒绝）
-        LOG_ERROR("服务器拒绝订阅: " + topic);
+        LOG_ERROR("服务器拒绝订阅: " + topicStr);
         return Result<bool>::Failure(
             MqttError(MqttErrorCode::SUBSCRIBE_FAILED,
-                     "服务器拒绝订阅: " + topic));
+                     "服务器拒绝订阅: " + topicStr));
     }
     
-    LOG_INFO("订阅成功: " + topic + ", QoS=" + 
+    LOG_INFO("订阅成功: " + topicStr + ", QoS=" + 
             std::to_string(static_cast<int>(subscribe.topics[0].return_code)));
     
     return Result<bool>::Success(true);
@@ -588,9 +594,8 @@ Result<bool> WolfMqttAdapter::subscribe(const std::string& topic, QoS qos) {
 #endif
 }
 
-Result<bool> WolfMqttAdapter::unsubscribe(const std::string& topic) {
-    (void)topic;  // 避免未使用参数警告（在未启用wolfMQTT时）
-    std::lock_guard<std::mutex> lock(mutex_);
+Result<bool> WolfMqttAdapter::unsubscribe([[maybe_unused]] std::string_view topic) {
+    std::lock_guard lock(mutex_);
     
     if (!connected_.load()) {
         return Result<bool>::Failure(
@@ -610,7 +615,8 @@ Result<bool> WolfMqttAdapter::unsubscribe(const std::string& topic) {
     unsubscribe.topic_count = 1;
     
     MqttTopic topics[1];
-    topics[0].topic_filter = const_cast<char*>(topic.c_str());
+    const std::string topicStr(topic);
+    topics[0].topic_filter = const_cast<char*>(topicStr.c_str());
     
     unsubscribe.topics = topics;
     
@@ -630,19 +636,19 @@ Result<bool> WolfMqttAdapter::unsubscribe(const std::string& topic) {
 }
 
 void WolfMqttAdapter::setMessageCallback(
-    std::function<void(const std::string&, const std::string&, QoS)> callback) {
-    std::lock_guard<std::mutex> lock(mutex_);
+    const std::function<void(std::string_view, std::string_view, QoS)>& callback) {
+    std::lock_guard lock(mutex_);
     messageCallback_ = callback;
 }
 
 void WolfMqttAdapter::setConnectionCallback(
-    std::function<void(bool)> callback) {
-    std::lock_guard<std::mutex> lock(mutex_);
+    const std::function<void(bool)>& callback) {
+    std::lock_guard lock(mutex_);
     connectionCallback_ = callback;
 }
 
-Result<bool> WolfMqttAdapter::processNetwork() {
-    std::lock_guard<std::mutex> lock(mutex_);
+Result<bool> WolfMqttAdapter::processNetwork() const {
+    std::lock_guard lock(mutex_);
     
     if (!connected_.load()) {
         return Result<bool>::Success(true);
@@ -664,10 +670,13 @@ Result<bool> WolfMqttAdapter::processNetwork() {
 void WolfMqttAdapter::cleanup() {
     // 先断开连接（会停止消息接收线程）
     if (connected_.load()) {
-        disconnect();
+        const auto disconnectResult = disconnect();
+        if (!disconnectResult) {
+            LOG_ERROR("清理时断开连接失败: " + disconnectResult.error.message);
+        }
     }
     
-    std::unique_lock<std::mutex> lock(mutex_);
+    std::unique_lock lock(mutex_);
     
     // 确保消息接收线程已停止
     if (messageThreadRunning_.load()) {
@@ -709,8 +718,8 @@ Result<bool> WolfMqttAdapter::createClient() {
     }
     
     LOG_INFO("初始化wolfMQTT客户端: cmd_timeout_ms=" + std::to_string(cmdTimeoutMs));
-    
-    int rc = MqttClient_Init(
+
+    const int rc = MqttClient_Init(
         wolfClient_.get(),
         &net_,
         messageCallback,
@@ -743,8 +752,9 @@ Result<bool> WolfMqttAdapter::configureConnection(MqttConnect& connect) {
     
     // 注意：这里需要确保clientId在connect生命周期内有效
     // 实际实现中应该使用成员变量存储
-    // 使用静态变量临时存储（后续改进为成员变量）
-    static thread_local std::string storedClientId;
+    // 使用 thread_local 变量临时存储（后续改进为成员变量）
+    // 在 .cpp 文件中，thread_local 不需要 static（thread_local 本身就有内部链接）
+    thread_local std::string storedClientId;
     storedClientId = clientId;
     connect.client_id = const_cast<char*>(storedClientId.c_str());
     
@@ -756,8 +766,8 @@ Result<bool> WolfMqttAdapter::configureConnection(MqttConnect& connect) {
     
     // 设置用户名和密码
     if (!config_.auth.username.empty()) {
-        static thread_local std::string storedUsername = config_.auth.username;
-        static thread_local std::string storedPassword = config_.auth.password;
+        thread_local std::string storedUsername = config_.auth.username;
+        thread_local std::string storedPassword = config_.auth.password;
         storedUsername = config_.auth.username;
         storedPassword = config_.auth.password;
         connect.username = const_cast<char*>(storedUsername.c_str());
@@ -776,8 +786,7 @@ Result<bool> WolfMqttAdapter::configureConnection(MqttConnect& connect) {
         // 如果 cleanStart=false，设置会话过期时间
         // 如果 cleanStart=true，会话将在断开连接时立即过期
         if (!config_.basic.cleanStart && config_.mqtt5.sessionExpiryInterval > 0) {
-            MqttProp* prop = MqttClient_PropsAdd(&connect.props);
-            if (prop) {
+            if (MqttProp* prop = MqttClient_PropsAdd(&connect.props)) {
                 prop->type = MQTT_PROP_SESSION_EXPIRY_INTERVAL;
                 prop->data_int = static_cast<word32>(config_.mqtt5.sessionExpiryInterval);
                 LOG_DEBUG("设置会话过期间隔: " + std::to_string(config_.mqtt5.sessionExpiryInterval) + " 秒");
@@ -786,8 +795,7 @@ Result<bool> WolfMqttAdapter::configureConnection(MqttConnect& connect) {
         
         // 接收最大数量（QoS > 0 的未确认消息数量）
         if (config_.mqtt5.receiveMaximum > 0) {
-            MqttProp* prop = MqttClient_PropsAdd(&connect.props);
-            if (prop) {
+            if (MqttProp* prop = MqttClient_PropsAdd(&connect.props)) {
                 prop->type = MQTT_PROP_RECEIVE_MAX;
                 prop->data_short = static_cast<word16>(config_.mqtt5.receiveMaximum);
                 LOG_DEBUG("设置接收最大数量: " + std::to_string(config_.mqtt5.receiveMaximum));
@@ -796,8 +804,7 @@ Result<bool> WolfMqttAdapter::configureConnection(MqttConnect& connect) {
         
         // 最大包大小（字节）
         if (config_.mqtt5.maximumPacketSize > 0) {
-            MqttProp* prop = MqttClient_PropsAdd(&connect.props);
-            if (prop) {
+            if (MqttProp* prop = MqttClient_PropsAdd(&connect.props)) {
                 prop->type = MQTT_PROP_MAX_PACKET_SZ;
                 prop->data_int = static_cast<word32>(config_.mqtt5.maximumPacketSize);
                 LOG_DEBUG("设置最大包大小: " + std::to_string(config_.mqtt5.maximumPacketSize) + " 字节");
@@ -807,8 +814,7 @@ Result<bool> WolfMqttAdapter::configureConnection(MqttConnect& connect) {
         // 请求响应信息
         // 如果为 true，服务器将在 CONNACK 中返回响应信息
         {
-            MqttProp* prop = MqttClient_PropsAdd(&connect.props);
-            if (prop) {
+            if (MqttProp* prop = MqttClient_PropsAdd(&connect.props)) {
                 prop->type = MQTT_PROP_REQ_RESP_INFO;
                 prop->data_byte = config_.mqtt5.requestResponseInformation ? 1 : 0;
                 LOG_DEBUG("请求响应信息: " + std::string(config_.mqtt5.requestResponseInformation ? "是" : "否"));
@@ -818,8 +824,7 @@ Result<bool> WolfMqttAdapter::configureConnection(MqttConnect& connect) {
         // 请求问题信息
         // 如果为 true，服务器将在错误响应中包含原因字符串和用户属性
         {
-            MqttProp* prop = MqttClient_PropsAdd(&connect.props);
-            if (prop) {
+            if (MqttProp* prop = MqttClient_PropsAdd(&connect.props)) {
                 prop->type = MQTT_PROP_REQ_PROB_INFO;
                 prop->data_byte = config_.mqtt5.requestProblemInformation ? 1 : 0;
                 LOG_DEBUG("请求问题信息: " + std::string(config_.mqtt5.requestProblemInformation ? "是" : "否"));
@@ -829,32 +834,32 @@ Result<bool> WolfMqttAdapter::configureConnection(MqttConnect& connect) {
         // 用户属性
         // MQTT 5.0 允许在 CONNECT 包中添加用户属性
         for (const auto& [key, value] : config_.mqtt5.userProperties) {
-            MqttProp* prop = MqttClient_PropsAdd(&connect.props);
-            if (prop) {
+            if (MqttProp* prop = MqttClient_PropsAdd(&connect.props)) {
                 prop->type = MQTT_PROP_USER_PROP;
                 // 用户属性需要两个字符串：key 和 value
                 // 注意：这里需要确保字符串在连接期间保持有效
-                static thread_local std::map<std::string, std::pair<std::string, std::string>> storedUserProps;
+                thread_local std::map<std::string, std::pair<std::string, std::string>> storedUserProps;
                 storedUserProps[key] = {key, value};
                 prop->data_str.str = const_cast<char*>(storedUserProps[key].first.c_str());
                 prop->data_str.len = static_cast<word16>(storedUserProps[key].first.length());
                 prop->data_str2.str = const_cast<char*>(storedUserProps[key].second.c_str());
                 prop->data_str2.len = static_cast<word16>(storedUserProps[key].second.length());
-                LOG_DEBUG("添加用户属性: " + key + " = " + value);
+
+                LOG_DEBUG(fmt::format("添加用户属性: {} = {}", key, value));
             }
         }
         
         // 遗嘱消息配置（MQTT 5.0）
-        // 注意：wolfMQTT 的 lwt_msg 是指向 MqttMessage 的指针
-        // 需要创建一个 MqttMessage 对象并设置指针
+        // 注意：wolfMQTT 的 lwt_msg 是指向 ::MqttMessage 的指针
+        // 需要创建一个 ::MqttMessage 对象并设置指针
         if (config_.mqtt5.willMessage.enabled) {
             // 使用静态变量存储遗嘱消息（确保在连接期间有效）
-            static thread_local MqttMessage lwtMessage;
-            XMEMSET(&lwtMessage, 0, sizeof(MqttMessage));
+            thread_local ::MqttMessage lwtMessage;
+            XMEMSET(&lwtMessage, 0, sizeof(::MqttMessage));
             
             // 设置遗嘱消息基本属性
-            static thread_local std::string storedWillTopic = config_.mqtt5.willMessage.topic;
-            static thread_local std::string storedWillPayload = config_.mqtt5.willMessage.payload;
+            thread_local std::string storedWillTopic = config_.mqtt5.willMessage.topic;
+            thread_local std::string storedWillPayload = config_.mqtt5.willMessage.payload;
             storedWillTopic = config_.mqtt5.willMessage.topic;
             storedWillPayload = config_.mqtt5.willMessage.payload;
             
@@ -869,8 +874,7 @@ Result<bool> WolfMqttAdapter::configureConnection(MqttConnect& connect) {
             
             // 设置遗嘱延迟间隔（秒）
             if (config_.mqtt5.willMessage.delayInterval > 0) {
-                MqttProp* prop = MqttClient_PropsAdd(&lwtMessage.props);
-                if (prop) {
+                if (MqttProp* prop = MqttClient_PropsAdd(&lwtMessage.props)) {
                     prop->type = MQTT_PROP_WILL_DELAY_INTERVAL;
                     prop->data_int = static_cast<word32>(config_.mqtt5.willMessage.delayInterval);
                     LOG_DEBUG("设置遗嘱延迟间隔: " + std::to_string(config_.mqtt5.willMessage.delayInterval) + " 秒");
@@ -899,8 +903,8 @@ Result<bool> WolfMqttAdapter::configureConnection(MqttConnect& connect) {
     return Result<bool>::Success(true);
 }
 
-Result<bool> WolfMqttAdapter::publish(const std::string& topic,
-                                     const std::string& payload,
+Result<bool> WolfMqttAdapter::publish(std::string_view topic,
+                                     std::string_view payload,
                                      const MqttProperties& properties,
                                      QoS qos,
                                      bool retained) {
@@ -928,11 +932,13 @@ Result<bool> WolfMqttAdapter::publish(const std::string& topic,
     XMEMSET(&publish, 0, sizeof(MqttPublish));
     
     // 设置基本属性
-    publish.topic_name = const_cast<char*>(topic.c_str());
-    publish.topic_name_len = static_cast<word16>(topic.length());
-    publish.buffer = reinterpret_cast<byte*>(const_cast<char*>(payload.c_str()));
-    publish.buffer_len = static_cast<word32>(payload.length());
-    publish.total_len = static_cast<word32>(payload.length());
+    const std::string topicStr(topic);
+    const std::string payloadStr(payload);
+    publish.topic_name = const_cast<char*>(topicStr.c_str());
+    publish.topic_name_len = static_cast<word16>(topicStr.length());
+    publish.buffer = reinterpret_cast<byte*>(const_cast<char*>(payloadStr.c_str()));
+    publish.buffer_len = static_cast<word32>(payloadStr.length());
+    publish.total_len = static_cast<word32>(payloadStr.length());
     publish.qos = static_cast<MqttQoS>(qos);
     publish.retain = retained ? 1 : 0;
     publish.duplicate = 0;
@@ -950,8 +956,7 @@ Result<bool> WolfMqttAdapter::publish(const std::string& topic,
     // ========== 设置 MQTT 5.0 属性 ==========
     // 消息过期时间（秒）
     if (properties.messageExpiryInterval.has_value()) {
-        MqttProp* prop = MqttClient_PropsAdd(&publish.props);
-        if (prop) {
+        if (MqttProp* prop = MqttClient_PropsAdd(&publish.props)) {
             prop->type = MQTT_PROP_MSG_EXPIRY_INTERVAL;
             prop->data_int = static_cast<word32>(*properties.messageExpiryInterval);
             LOG_DEBUG("设置消息过期时间: " + std::to_string(*properties.messageExpiryInterval) + " 秒");
@@ -960,11 +965,10 @@ Result<bool> WolfMqttAdapter::publish(const std::string& topic,
     
     // 内容类型
     if (properties.contentType.has_value() && !properties.contentType->empty()) {
-        MqttProp* prop = MqttClient_PropsAdd(&publish.props);
-        if (prop) {
+        if (MqttProp* prop = MqttClient_PropsAdd(&publish.props)) {
             prop->type = MQTT_PROP_CONTENT_TYPE;
             // 需要确保字符串在发布期间有效
-            static thread_local std::string storedContentType = *properties.contentType;
+            thread_local std::string storedContentType = *properties.contentType;
             storedContentType = *properties.contentType;
             prop->data_str.str = const_cast<char*>(storedContentType.c_str());
             prop->data_str.len = static_cast<word16>(storedContentType.length());
@@ -974,10 +978,9 @@ Result<bool> WolfMqttAdapter::publish(const std::string& topic,
     
     // 响应主题
     if (properties.responseTopic.has_value() && !properties.responseTopic->empty()) {
-        MqttProp* prop = MqttClient_PropsAdd(&publish.props);
-        if (prop) {
+        if (MqttProp* prop = MqttClient_PropsAdd(&publish.props)) {
             prop->type = MQTT_PROP_RESP_TOPIC;
-            static thread_local std::string storedResponseTopic = *properties.responseTopic;
+            thread_local std::string storedResponseTopic = *properties.responseTopic;
             storedResponseTopic = *properties.responseTopic;
             prop->data_str.str = const_cast<char*>(storedResponseTopic.c_str());
             prop->data_str.len = static_cast<word16>(storedResponseTopic.length());
@@ -987,10 +990,9 @@ Result<bool> WolfMqttAdapter::publish(const std::string& topic,
     
     // 关联数据
     if (properties.correlationData.has_value() && !properties.correlationData->empty()) {
-        MqttProp* prop = MqttClient_PropsAdd(&publish.props);
-        if (prop) {
+        if (MqttProp* prop = MqttClient_PropsAdd(&publish.props)) {
             prop->type = MQTT_PROP_CORRELATION_DATA;
-            static thread_local std::string storedCorrelationData = *properties.correlationData;
+            thread_local std::string storedCorrelationData = *properties.correlationData;
             storedCorrelationData = *properties.correlationData;
             prop->data_bin.data = reinterpret_cast<byte*>(const_cast<char*>(storedCorrelationData.c_str()));
             prop->data_bin.len = static_cast<word16>(storedCorrelationData.length());
@@ -1000,30 +1002,28 @@ Result<bool> WolfMqttAdapter::publish(const std::string& topic,
     
     // 用户属性
     for (const auto& [key, value] : properties.userProperties) {
-        MqttProp* prop = MqttClient_PropsAdd(&publish.props);
-        if (prop) {
+        if (MqttProp* prop = MqttClient_PropsAdd(&publish.props)) {
             prop->type = MQTT_PROP_USER_PROP;
             // 用户属性需要两个字符串：key 和 value
-            static thread_local std::map<std::string, std::pair<std::string, std::string>> storedUserProps;
+            thread_local std::map<std::string, std::pair<std::string, std::string>> storedUserProps;
             storedUserProps[key] = {key, value};
             prop->data_str.str = const_cast<char*>(storedUserProps[key].first.c_str());
             prop->data_str.len = static_cast<word16>(storedUserProps[key].first.length());
             prop->data_str2.str = const_cast<char*>(storedUserProps[key].second.c_str());
             prop->data_str2.len = static_cast<word16>(storedUserProps[key].second.length());
-            LOG_DEBUG("添加用户属性: " + key + " = " + value);
+            LOG_DEBUG(fmt::format("添加用户属性: {} = {}", key, value));
         }
     }
     
-    LOG_INFO("准备发布消息（带属性）: Topic=" + topic + 
-            ", Payload长度=" + std::to_string(payload.length()) + 
+    LOG_INFO("准备发布消息（带属性）: Topic=" + topicStr + 
+            ", Payload长度=" + std::to_string(payloadStr.length()) + 
             ", QoS=" + std::to_string(static_cast<int>(qos)) + 
             ", PacketID=" + std::to_string(publish.packet_id) +
             ", 属性数量=" + std::to_string(properties.userProperties.size()));
     
     // 获取锁并发布
-    int rc;
     {
-        std::lock_guard<std::mutex> lock(mutex_);
+        std::lock_guard lock(mutex_);
         
         // 再次检查连接状态
         if (!connected_.load() || !wolfClient_) {
@@ -1043,16 +1043,23 @@ Result<bool> WolfMqttAdapter::publish(const std::string& topic,
             attemptCount++;
             LOG_DEBUG("开始发布（带属性） (尝试 #" + std::to_string(attemptCount) + ")");
             
-            rc = MqttClient_Publish(wolfClient_.get(), &publish);
+            int rc = MqttClient_Publish(wolfClient_.get(), &publish);
             
             if (rc == MQTT_CODE_PUB_CONTINUE) {
                 continue;
             }
             
             if (rc == MQTT_CODE_CONTINUE && qos > QoS::QOS_0) {
-                std::this_thread::sleep_for(std::chrono::milliseconds(500));
-                rc = MQTT_CODE_SUCCESS;
-                break;
+                LOG_INFO("发布返回 CONTINUE，等待 PUBACK 被接收...");
+                std::this_thread::sleep_for(500ms);
+                // 假设发布成功（因为 PUBACK 已经被 messageReceiveThread 接收）
+                LOG_INFO("假设发布成功（PUBACK 已由 messageReceiveThread 接收）");
+                // 清理属性
+                if (publish.props) {
+                    MqttClient_PropsFree(publish.props);
+                    publish.props = nullptr;
+                }
+                return Result<bool>::Success(true);
             }
             
             if (rc != MQTT_CODE_SUCCESS) {
@@ -1070,7 +1077,7 @@ Result<bool> WolfMqttAdapter::publish(const std::string& topic,
                              "发布失败: " + std::to_string(rc)));
             }
             
-            LOG_INFO("发布成功（带属性） (Topic: " + topic + 
+            LOG_INFO("发布成功（带属性） (Topic: " + topicStr + 
                     ", PacketID: " + std::to_string(publish.packet_id) + ")");
             break;
         } while (true);
@@ -1096,8 +1103,8 @@ Result<bool> WolfMqttAdapter::configureTLS() {
     return Result<bool>::Success(true);
 }
 
-int WolfMqttAdapter::networkConnect(void* context, const char* host, word16 port, int timeout_ms) {
-    WolfMqttAdapter* adapter = static_cast<WolfMqttAdapter*>(context);
+int WolfMqttAdapter::networkConnect(void* context, const char* host, word16 port, const int timeout_ms) {
+    auto* adapter = static_cast<WolfMqttAdapter*>(context);
     NetworkContext* netCtx = &adapter->networkContext_;
     
     LOG_INFO("networkConnect: 连接到 " + std::string(host) + ":" + std::to_string(port));
@@ -1116,18 +1123,18 @@ int WolfMqttAdapter::networkConnect(void* context, const char* host, word16 port
     }
     
     // 设置socket选项
-    int opt = 1;
+    const int opt = 1;
     ::setsockopt(netCtx->socketFd, SOL_SOCKET, SO_REUSEADDR, &opt, sizeof(opt));
     
     // 设置超时
-    struct timeval tv;
+    timeval tv{};
     tv.tv_sec = timeout_ms / 1000;
     tv.tv_usec = (timeout_ms % 1000) * 1000;
     ::setsockopt(netCtx->socketFd, SOL_SOCKET, SO_SNDTIMEO, &tv, sizeof(tv));
     ::setsockopt(netCtx->socketFd, SOL_SOCKET, SO_RCVTIMEO, &tv, sizeof(tv));
     
     // 解析主机地址
-    struct sockaddr_in addr;
+    sockaddr_in addr{};
     ::memset(&addr, 0, sizeof(addr));
     addr.sin_family = AF_INET;
     addr.sin_port = htons(port);
@@ -1135,13 +1142,12 @@ int WolfMqttAdapter::networkConnect(void* context, const char* host, word16 port
     // 尝试将host解析为IP地址
     if (::inet_pton(AF_INET, host, &addr.sin_addr) <= 0) {
         // 如果不是IP地址，使用getaddrinfo进行DNS解析
-        struct addrinfo hints, *result = nullptr;
+        addrinfo hints{}, *result = nullptr;
         ::memset(&hints, 0, sizeof(hints));
         hints.ai_family = AF_INET;
         hints.ai_socktype = SOCK_STREAM;
-        
-        int rc = ::getaddrinfo(host, nullptr, &hints, &result);
-        if (rc != 0 || result == nullptr) {
+
+        if (const int rc = ::getaddrinfo(host, nullptr, &hints, &result); rc != 0 || result == nullptr) {
             LOG_ERROR("networkConnect: DNS解析失败: " + std::string(gai_strerror(rc)));
             ::close(netCtx->socketFd);
             netCtx->socketFd = -1;
@@ -1149,15 +1155,14 @@ int WolfMqttAdapter::networkConnect(void* context, const char* host, word16 port
         }
         
         // 使用第一个结果
-        struct sockaddr_in* addr_in = (struct sockaddr_in*)result->ai_addr;
+        const auto* addr_in = reinterpret_cast<struct sockaddr_in *>(result->ai_addr);
         addr.sin_addr = addr_in->sin_addr;
         
         ::freeaddrinfo(result);
     }
     
     // 连接
-    int rc = ::connect(netCtx->socketFd, (struct sockaddr*)&addr, sizeof(addr));
-    if (rc < 0) {
+    if (const int rc = ::connect(netCtx->socketFd, reinterpret_cast<struct sockaddr *>(&addr), sizeof(addr)); rc < 0) {
         LOG_ERROR("networkConnect: TCP连接失败: " + std::string(strerror(errno)) + " (errno=" + std::to_string(errno) + ")");
         ::close(netCtx->socketFd);
         netCtx->socketFd = -1;
@@ -1169,10 +1174,9 @@ int WolfMqttAdapter::networkConnect(void* context, const char* host, word16 port
 }
 
 int WolfMqttAdapter::networkDisconnect(void* context) {
-    WolfMqttAdapter* adapter = static_cast<WolfMqttAdapter*>(context);
-    NetworkContext* netCtx = &adapter->networkContext_;
-    
-    if (netCtx->socketFd >= 0) {
+    auto* adapter = static_cast<WolfMqttAdapter*>(context);
+
+    if (NetworkContext* netCtx = &adapter->networkContext_; netCtx->socketFd >= 0) {
         ::close(netCtx->socketFd);
         netCtx->socketFd = -1;
     }
@@ -1180,10 +1184,9 @@ int WolfMqttAdapter::networkDisconnect(void* context) {
     return MQTT_CODE_SUCCESS;
 }
 
-int WolfMqttAdapter::networkSend(void* context, const byte* buf, int buf_len, int timeout_ms) {
-    (void)timeout_ms;  // 暂时未使用超时
-    WolfMqttAdapter* adapter = static_cast<WolfMqttAdapter*>(context);
-    NetworkContext* netCtx = &adapter->networkContext_;
+int WolfMqttAdapter::networkSend(void* context, const byte* buf, int buf_len, [[maybe_unused]] int timeout_ms) {
+    const auto* adapter = static_cast<WolfMqttAdapter*>(context);
+    const NetworkContext* netCtx = &adapter->networkContext_;
     
     if (netCtx->socketFd < 0) {
         LOG_ERROR("网络发送失败: socket无效");
@@ -1191,10 +1194,14 @@ int WolfMqttAdapter::networkSend(void* context, const byte* buf, int buf_len, in
     }
     
     // 发送数据
-    int sent = ::send(netCtx->socketFd, buf, buf_len, 0);
+    const ssize_t sent = ::send(netCtx->socketFd, buf, buf_len, 0);
     if (sent < 0) {
-        int err = errno;
-        if (err == EAGAIN || err == EWOULDBLOCK) {
+        const int err = errno;
+        if (err == EAGAIN
+#if defined(EWOULDBLOCK) && EWOULDBLOCK != EAGAIN
+            || err == EWOULDBLOCK
+#endif
+        ) {
             LOG_DEBUG("网络发送: EAGAIN/EWOULDBLOCK，返回CONTINUE");
             return MQTT_CODE_CONTINUE;
         }
@@ -1203,19 +1210,19 @@ int WolfMqttAdapter::networkSend(void* context, const byte* buf, int buf_len, in
         return MQTT_CODE_ERROR_NETWORK;
     }
     
-    if (sent != buf_len) {
+    if (sent != static_cast<ssize_t>(buf_len)) {
         LOG_WARN("网络发送部分数据: 期望=" + std::to_string(buf_len) + 
                 ", 实际=" + std::to_string(sent));
     } else {
         LOG_DEBUG("网络发送成功: " + std::to_string(sent) + " 字节");
     }
     
-    return sent;
+    return static_cast<int>(sent);
 }
 
-int WolfMqttAdapter::networkRecv(void* context, byte* buf, int buf_len, int timeout_ms) {
-    WolfMqttAdapter* adapter = static_cast<WolfMqttAdapter*>(context);
-    NetworkContext* netCtx = &adapter->networkContext_;
+int WolfMqttAdapter::networkRecv(void* context, byte* buf, const int buf_len, const int timeout_ms) {
+    const auto* adapter = static_cast<WolfMqttAdapter*>(context);
+    const NetworkContext* netCtx = &adapter->networkContext_;
     
     if (netCtx->socketFd < 0) {
         LOG_ERROR("网络接收失败: socket无效");
@@ -1224,11 +1231,10 @@ int WolfMqttAdapter::networkRecv(void* context, byte* buf, int buf_len, int time
     
     // 注意：如果启用TLS，这里接收的是加密的TLS数据
     // wolfSSL会在MqttSocket_ReadDo中解密这些数据
-    // 所以这里不应该尝试解析MQTT包类型（因为数据是加密的）
-    
+
     // 使用select等待数据就绪（类似wolfMQTT示例代码）
     fd_set readfds, errfds;
-    struct timeval tv;
+    timeval tv{};
     
     // 设置超时
     tv.tv_sec = timeout_ms / 1000;
@@ -1248,7 +1254,7 @@ int WolfMqttAdapter::networkRecv(void* context, byte* buf, int buf_len, int time
     FD_SET(netCtx->socketFd, &errfds);
     
     // 等待数据就绪
-    int selectResult = ::select(netCtx->socketFd + 1, &readfds, nullptr, &errfds, &tv);
+    const int selectResult = ::select(netCtx->socketFd + 1, &readfds, nullptr, &errfds, &tv);
     if (selectResult < 0) {
         LOG_ERROR("select失败: errno=" + std::to_string(errno));
         return MQTT_CODE_ERROR_NETWORK;
@@ -1261,12 +1267,11 @@ int WolfMqttAdapter::networkRecv(void* context, byte* buf, int buf_len, int time
         // 对于TCP连接，在连接建立阶段（等待CONNACK），也返回CONTINUE，允许重试
         // 注意：超时是正常情况（特别是在消息接收线程中轮询时），不需要频繁打印日志
         // 使用 thread_local 变量跟踪超时次数，只在连接建立阶段的前几次超时时打印日志
-        static thread_local int timeout_count = 0;
-        static thread_local bool connection_established = false;
-        
+
         // 如果这是连接建立后的第一次超时，标记连接已建立
         // 之后就不再打印超时日志（因为这是正常的轮询行为）
-        if (!connection_established) {
+        if (thread_local bool connection_established = false; !connection_established) {
+            thread_local int timeout_count = 0;
             timeout_count++;
             // 只在连接建立阶段的前几次超时时打印日志（最多3次）
             if (timeout_count <= 3) {
@@ -1285,14 +1290,6 @@ int WolfMqttAdapter::networkRecv(void* context, byte* buf, int buf_len, int time
         return MQTT_CODE_CONTINUE;
     }
     
-    // 收到数据时，重置超时计数和连接状态（表示连接活跃，可能刚建立连接）
-    // 这样下次连接时可以从头开始计数
-    // 注意：由于 thread_local 变量的作用域限制，我们需要在同一个作用域内访问
-    // 这里通过一个辅助函数来重置状态（如果需要的话）
-    // 实际上，由于 thread_local 变量在每次线程启动时都会重新初始化，
-    // 所以不需要显式重置。但如果同一个线程多次连接/断开，我们可以通过
-    // 在 networkConnect 中重置这些变量来实现
-    
     // 检查错误
     if (FD_ISSET(netCtx->socketFd, &errfds)) {
         LOG_ERROR("socket错误");
@@ -1306,10 +1303,14 @@ int WolfMqttAdapter::networkRecv(void* context, byte* buf, int buf_len, int time
     }
     
     // 接收数据
-    int received = ::recv(netCtx->socketFd, buf, buf_len, 0);
+    const ssize_t received = ::recv(netCtx->socketFd, buf, buf_len, 0);
     if (received < 0) {
-        int err = errno;
-        if (err == EAGAIN || err == EWOULDBLOCK) {
+        const int err = errno;
+        if (err == EAGAIN
+#if defined(EWOULDBLOCK) && EWOULDBLOCK != EAGAIN
+            || err == EWOULDBLOCK
+#endif
+        ) {
             LOG_DEBUG("网络接收: EAGAIN/EWOULDBLOCK，返回CONTINUE");
             return MQTT_CODE_CONTINUE;
         }
@@ -1323,53 +1324,50 @@ int WolfMqttAdapter::networkRecv(void* context, byte* buf, int buf_len, int time
         LOG_WARN("连接已关闭");
         return MQTT_CODE_ERROR_NETWORK;
     }
-    
-    if (received > 0) {
-        // 如果启用TLS，这里接收的是加密的TLS数据，不应该尝试解析MQTT包类型
-        // 只有在非TLS模式下才解析MQTT包类型
-        if (!netCtx->isTLS) {
-            LOG_INFO("网络接收成功: " + std::to_string(received) + " 字节");
-            // 打印MQTT包类型用于调试（仅非TLS模式）
-            if (received >= 1) {
-                byte packetType = (buf[0] >> 4) & 0x0F;
-                const char* packetTypeName = "";
-                switch (packetType) {
-                    case 1: packetTypeName = "CONNECT"; break;
-                    case 2: packetTypeName = "CONNACK"; break;
-                    case 3: packetTypeName = "PUBLISH"; break;
-                    case 4: packetTypeName = "PUBACK"; break;
-                    case 5: packetTypeName = "PUBREC"; break;
-                    case 6: packetTypeName = "PUBREL"; break;
-                    case 7: packetTypeName = "PUBCOMP"; break;
-                    case 8: packetTypeName = "SUBSCRIBE"; break;
-                    case 9: packetTypeName = "SUBACK"; break;
-                    case 10: packetTypeName = "UNSUBSCRIBE"; break;
-                    case 11: packetTypeName = "UNSUBACK"; break;
-                    case 12: packetTypeName = "PINGREQ"; break;
-                    case 13: packetTypeName = "PINGRESP"; break;
-                    case 14: packetTypeName = "DISCONNECT"; break;
-                    default: packetTypeName = "UNKNOWN"; break;
-                }
-                LOG_DEBUG("收到MQTT包: 类型=" + std::string(packetTypeName) + 
-                        " (" + std::to_string(packetType) + ")");
-            }
-        } else {
-            // TLS模式：只记录接收的加密数据长度
-            LOG_DEBUG("网络接收成功 (TLS加密数据): " + std::to_string(received) + " 字节");
+
+    // 如果启用TLS，这里接收的是加密的TLS数据，不应该尝试解析MQTT包类型
+    // 只有在非TLS模式下才解析MQTT包类型
+    if (!netCtx->isTLS) {
+        LOG_INFO("网络接收成功: " + std::to_string(received) + " 字节");
+        // 打印MQTT包类型用于调试（仅非TLS模式）
+        const byte packetType = buf[0] >> 4 & 0x0F;
+        std::string packetTypeName;
+        switch (packetType) {
+            case 1: packetTypeName = "CONNECT"; break;
+            case 2: packetTypeName = "CONNACK"; break;
+            case 3: packetTypeName = "PUBLISH"; break;
+            case 4: packetTypeName = "PUBACK"; break;
+            case 5: packetTypeName = "PUBREC"; break;
+            case 6: packetTypeName = "PUBREL"; break;
+            case 7: packetTypeName = "PUBCOMP"; break;
+            case 8: packetTypeName = "SUBSCRIBE"; break;
+            case 9: packetTypeName = "SUBACK"; break;
+            case 10: packetTypeName = "UNSUBSCRIBE"; break;
+            case 11: packetTypeName = "UNSUBACK"; break;
+            case 12: packetTypeName = "PINGREQ"; break;
+            case 13: packetTypeName = "PINGRESP"; break;
+            case 14: packetTypeName = "DISCONNECT"; break;
+            default: packetTypeName = "UNKNOWN"; break;
         }
+        LOG_DEBUG("收到MQTT包: 类型=" + packetTypeName +
+                " (" + std::to_string(packetType) + ")");
+    } else {
+        // TLS模式：只记录接收的加密数据长度
+        LOG_DEBUG("网络接收成功 (TLS加密数据): " + std::to_string(received) + " 字节");
     }
     
-    return received;
+    return static_cast<int>(received);
 }
 
-int WolfMqttAdapter::messageCallback(::MqttClient* client, ::MqttMessage* message,
-                                     byte msg_new, byte msg_done) {
-    (void)client;
-    
+// ReSharper disable once CppDFAConstantFunctionResult
+int WolfMqttAdapter::messageCallback([[maybe_unused]] ::MqttClient* client, ::MqttMessage* message,
+                                     const byte msg_new, const byte msg_done) {
     // 从上下文获取适配器实例
     // 使用thread_local静态变量，在connect时设置
     if (!g_currentAdapter) {
         LOG_WARN("messageCallback: g_currentAdapter 为空");
+        // 注意：即使适配器为空，也返回成功，因为这是通知回调而非错误报告
+        // wolfMQTT 只需要知道回调已执行，不需要知道内部处理状态
         return MQTT_CODE_SUCCESS;
     }
     
@@ -1384,17 +1382,17 @@ int WolfMqttAdapter::messageCallback(::MqttClient* client, ::MqttMessage* messag
     // 如果消息接收完成，调用回调
     if (msg_done && message && message->topic_name) {
         // 使用wolfMQTT的MqttMessage结构（使用::前缀避免命名冲突）
-        std::string topic(message->topic_name, message->topic_name_len);
-        std::string payload(reinterpret_cast<const char*>(message->buffer), 
+        const std::string topic(message->topic_name, message->topic_name_len);
+        const std::string payload(reinterpret_cast<const char*>(message->buffer),
                            message->buffer_len);
-        QoS qos = static_cast<QoS>(message->qos);
+        auto qos = static_cast<QoS>(message->qos);
         
         LOG_INFO("消息接收完成: topic=" + topic + 
                  ", payload_len=" + std::to_string(payload.length()) + 
                  ", qos=" + std::to_string(static_cast<int>(qos)));
         
         // 调用适配器的消息回调
-        std::lock_guard<std::mutex> lock(g_currentAdapter->mutex_);
+        std::lock_guard lock(g_currentAdapter->mutex_);
         if (g_currentAdapter->messageCallback_) {
             LOG_INFO("调用消息回调: topic=" + topic);
             g_currentAdapter->messageCallback_(topic, payload, qos);
@@ -1407,6 +1405,9 @@ int WolfMqttAdapter::messageCallback(::MqttClient* client, ::MqttMessage* messag
                  ", topic_name=" + std::to_string(message && message->topic_name != nullptr));
     }
     
+    // 注意：此回调函数总是返回成功
+    // 这是 wolfMQTT 的消息通知回调，用于告知消息已到达
+    // 即使内部处理有问题（如回调未设置），也不应让 wolfMQTT 认为消息处理失败
     return MQTT_CODE_SUCCESS;
 }
 
@@ -1430,26 +1431,23 @@ void WolfMqttAdapter::messageReceiveThread() {
         }
         
         // 等待消息（超时时间1000ms）
-        int rc = MqttClient_WaitMessage(wolfClient_.get(), 1000);
-        
-        if (rc == MQTT_CODE_ERROR_TIMEOUT) {
-            // 超时是正常的，继续循环
-            continue;
-        } else if (rc == MQTT_CODE_ERROR_NETWORK) {
+        const int rc = MqttClient_WaitMessage(wolfClient_.get(), 1000);
+
+        if (rc == MQTT_CODE_ERROR_NETWORK) {
             // 网络错误，可能连接已断开
             connected_.store(false);
             if (connectionCallback_) {
                 connectionCallback_(false);
             }
             break;
-        } else if (rc == MQTT_CODE_SUCCESS || rc == MQTT_CODE_CONTINUE) {
-            // 成功或继续，继续循环
-            continue;
-        } else {
-            // 其他错误
+        }
+
+        // 其他情况都继续循环（超时、成功、继续都是正常的）
+        // 只有非预期的错误码才记录警告
+        if (rc != MQTT_CODE_ERROR_TIMEOUT && 
+            rc != MQTT_CODE_SUCCESS && 
+            rc != MQTT_CODE_CONTINUE) {
             LOG_WARN("消息接收错误: " + std::to_string(rc));
-            // 不立即退出，继续尝试
-            continue;
         }
     }
 }

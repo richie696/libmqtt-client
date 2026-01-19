@@ -30,7 +30,7 @@ public:
      * @param data 数据内容
      * @return Result<bool> 写入结果
      */
-    virtual Result<bool> write(const std::string& key, const std::string& data) = 0;
+    [[nodiscard]] virtual Result<bool> write(const std::string& key, const std::string& data) = 0;
     
     /**
      * @brief 读取数据
@@ -38,7 +38,7 @@ public:
      * @param key 数据键（通常是文件路径）
      * @return Result<std::string> 读取的数据
      */
-    virtual Result<std::string> read(const std::string& key) = 0;
+    [[nodiscard]] virtual Result<std::string> read(const std::string& key) = 0;
     
     /**
      * @brief 删除数据
@@ -46,7 +46,7 @@ public:
      * @param key 数据键（通常是文件路径）
      * @return Result<bool> 删除结果
      */
-    virtual Result<bool> remove(const std::string& key) = 0;
+    [[nodiscard]] virtual Result<bool> remove(const std::string& key) = 0;
     
     /**
      * @brief 检查数据是否存在
@@ -54,14 +54,14 @@ public:
      * @param key 数据键（通常是文件路径）
      * @return bool 是否存在
      */
-    virtual bool exists(const std::string& key) = 0;
+    [[nodiscard]] virtual bool exists(const std::string& key) = 0;
     
     /**
      * @brief 清空所有数据
      * 
      * @return Result<bool> 清空结果
      */
-    virtual Result<bool> clear() = 0;
+    [[nodiscard]] virtual Result<bool> clear() = 0;
 };
 
 /**
@@ -76,7 +76,7 @@ public:
      * 
      * @param basePath 基础存储路径
      */
-    explicit FileStorageEngine(const std::string& basePath);
+    explicit FileStorageEngine(std::string basePath);
     
     /**
      * @brief 析构函数
@@ -86,32 +86,32 @@ public:
     /**
      * @brief 写入数据
      */
-    Result<bool> write(const std::string& key, const std::string& data) override;
+    [[nodiscard]] Result<bool> write(const std::string& key, const std::string& data) override;
     
     /**
      * @brief 读取数据
      */
-    Result<std::string> read(const std::string& key) override;
+    [[nodiscard]] Result<std::string> read(const std::string& key) override;
     
     /**
      * @brief 删除数据
      */
-    Result<bool> remove(const std::string& key) override;
+    [[nodiscard]] Result<bool> remove(const std::string& key) override;
     
     /**
      * @brief 检查数据是否存在
      */
-    bool exists(const std::string& key) override;
+    [[nodiscard]] bool exists(const std::string& key) override;
     
     /**
      * @brief 清空所有数据
      */
-    Result<bool> clear() override;
+    [[nodiscard]] Result<bool> clear() override;
     
     /**
      * @brief 获取完整路径
      */
-    std::string getFullPath(const std::string& key) const;
+    [[nodiscard]] std::string getFullPath(const std::string& key) const;
     
 private:
     std::string basePath_;
@@ -119,7 +119,7 @@ private:
     /**
      * @brief 确保目录存在
      */
-    Result<bool> ensureDirectory(const std::string& path);
+    [[nodiscard]] static Result<bool> ensureDirectory(const std::string& path);
 };
 
 } // namespace mqtt_client

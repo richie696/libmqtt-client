@@ -47,7 +47,7 @@ public:
      * @param connectFunc 连接函数，返回true表示连接成功
      * @return bool 是否成功启动重连
      */
-    bool startReconnect(std::function<bool()> connectFunc);
+    [[nodiscard]] bool startReconnect(std::function<bool()> connectFunc);
     
     /**
      * @brief 停止重连
@@ -60,28 +60,28 @@ public:
      * @return true 正在重连
      * @return false 未在重连
      */
-    bool isReconnecting() const;
+    [[nodiscard]] bool isReconnecting() const;
     
     /**
      * @brief 获取重连尝试次数
      * 
      * @return int 尝试次数
      */
-    int getAttemptCount() const;
+    [[nodiscard]] int getAttemptCount() const;
     
     /**
      * @brief 获取总重试时间
      * 
      * @return long 总重试时间（毫秒）
      */
-    long getTotalRetryTime() const;
+    [[nodiscard]] long getTotalRetryTime() const;
     
     /**
      * @brief 获取下次重试间隔
      * 
      * @return long 下次重试间隔（毫秒）
      */
-    long getNextRetryInterval() const;
+    [[nodiscard]] long getNextRetryInterval() const;
     
     /**
      * @brief 更新配置
@@ -111,7 +111,7 @@ private:
      * @param attempt 当前尝试次数
      * @return long 重试间隔（毫秒）
      */
-    long calculateBackoffInterval(int attempt) const;
+    [[nodiscard]] long calculateBackoffInterval(int attempt) const noexcept;
     
     /**
      * @brief 重连线程

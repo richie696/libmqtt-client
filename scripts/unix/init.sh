@@ -453,6 +453,29 @@ init_submodules() {
 }
 
 # 检查 submodule 是否已构建（检查第一个 submodule，用于兼容性）
+# 检查 submodule 是否已构建
+check_submodule_built() {
+    local submodule_path="$1"
+    if [ -z "$submodule_path" ]; then
+        return 1
+    fi
+    
+    local submodule_dir="${PROJECT_ROOT}/${submodule_path}"
+    local submodule_name=$(basename "$submodule_path")
+    
+    if [ ! -d "$submodule_dir" ]; then
+        return 1
+    fi
+    
+    # 检查是否已安装（有 install 目录和库文件）
+    local install_dir="${submodule_dir}/install"
+    if [ -d "${install_dir}/lib" ] && [ -n "$(find "${install_dir}/lib" -name "lib*.a" -o -name "lib*.so" -o -name "lib*.dylib" 2>/dev/null | head -1)" ]; then
+        return 0
+    else
+        return 1
+    fi
+}
+
 check_wolfmqtt_built() {
     local submodule_dir=$(get_first_submodule_dir)
     if [ -z "$submodule_dir" ]; then
@@ -502,7 +525,7 @@ build_wolfmqtt() {
     
     cd "$submodule_dir"
     
-    # 检测 wolfSSL 路径
+    # 检测系统安装的 wolfSSL（可选，用于 TLS 支持）
     local WOLFSSL_PATH=""
     if [[ "$PLATFORM" == "macOS" ]]; then
         if [ -d "/opt/homebrew/opt/wolfssl" ]; then
@@ -510,6 +533,11 @@ build_wolfmqtt() {
         elif [ -d "/usr/local/opt/wolfssl" ]; then
             WOLFSSL_PATH="/usr/local/opt/wolfssl"
         fi
+    fi
+    if [ -n "$WOLFSSL_PATH" ]; then
+        echo -e "${GREEN}使用系统安装的 wolfSSL: $WOLFSSL_PATH${NC}"
+    else
+        echo -e "${YELLOW}警告: 未找到 wolfSSL，TLS 功能将不可用${NC}"
     fi
     
     # 创建构建目录
@@ -530,9 +558,6 @@ build_wolfmqtt() {
     
     if [ -n "$WOLFSSL_PATH" ]; then
         CMAKE_ARGS+=("-DWITH_WOLFSSL=$WOLFSSL_PATH")
-        echo -e "${GREEN}使用 wolfSSL: $WOLFSSL_PATH${NC}"
-    else
-        echo -e "${YELLOW}警告: 未找到 wolfSSL，TLS 功能可能不可用${NC}"
     fi
     
     cmake "${CMAKE_ARGS[@]}"
@@ -574,7 +599,7 @@ main() {
     # 2. 初始化 Git Submodules
     init_submodules
     
-    # 3. 检查并构建 submodule
+    # 3. 检查并构建 wolfMQTT
     if ! check_wolfmqtt_built; then
         local submodule_dir=$(get_first_submodule_dir)
         local submodule_name="submodule"

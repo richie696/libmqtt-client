@@ -10,6 +10,8 @@
 #include <sstream>
 #include <iomanip>
 
+using namespace std::chrono_literals;
+
 namespace mqtt_client {
 
 HeartbeatManager::HeartbeatManager(MqttMessageManager& messageManager,
@@ -52,7 +54,7 @@ bool HeartbeatManager::isRunning() const {
 }
 
 HeartbeatManager::HeartbeatStats HeartbeatManager::getStats() const {
-    std::lock_guard<std::mutex> lock(mutex_);
+    std::lock_guard lock(mutex_);
     return stats_;
 }
 
@@ -95,12 +97,12 @@ void HeartbeatManager::heartbeatThread() {
         sendHeartbeat();
         
         // 等待下次心跳
-        std::this_thread::sleep_for(std::chrono::seconds(interval_));
+        std::this_thread::sleep_for(std::chrono::seconds{interval_});
     }
 }
 
 void HeartbeatManager::updateStats(bool success, long latency) {
-    std::lock_guard<std::mutex> lock(mutex_);
+    std::lock_guard lock(mutex_);
     
     if (success) {
         stats_.totalSent++;

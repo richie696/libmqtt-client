@@ -14,6 +14,7 @@
 #include "mqtt_client/core/error.h"
 #include <memory>
 #include <string>
+#include <string_view>
 #include <functional>
 #include <mutex>
 #include <thread>
@@ -56,21 +57,21 @@ public:
      * 
      * @return Result<bool> 初始化结果
      */
-    Result<bool> initialize();
+    [[nodiscard]] Result<bool> initialize();
     
     /**
      * @brief 连接服务器
      * 
      * @return Result<bool> 连接结果
      */
-    Result<bool> connect();
+    [[nodiscard]] Result<bool> connect();
     
     /**
      * @brief 断开连接
      * 
      * @return Result<bool> 断开结果
      */
-    Result<bool> disconnect();
+    [[nodiscard]] Result<bool> disconnect();
     
     /**
      * @brief 检查是否已连接
@@ -78,7 +79,7 @@ public:
      * @return true 已连接
      * @return false 未连接
      */
-    bool isConnected() const;
+    [[nodiscard]] bool isConnected() const;
     
     /**
      * @brief 发布消息
@@ -89,10 +90,10 @@ public:
      * @param retained 是否保留
      * @return Result<bool> 发布结果
      */
-    Result<bool> publish(const std::string& topic,
-                       const std::string& payload,
-                       QoS qos,
-                       bool retained = false);
+    [[nodiscard]] Result<bool> publish(std::string_view topic,
+                                       std::string_view payload,
+                                       QoS qos,
+                                       bool retained = false);
     
     /**
      * @brief 发布消息（带MQTT 5.0属性）
@@ -107,11 +108,11 @@ public:
      * @param retained 是否保留
      * @return Result<bool> 发布结果
      */
-    Result<bool> publish(const std::string& topic,
-                       const std::string& payload,
-                       const MqttProperties& properties,
-                       QoS qos,
-                       bool retained = false);
+    [[nodiscard]] Result<bool> publish(std::string_view topic,
+                                       std::string_view payload,
+                                       const MqttProperties& properties,
+                                       QoS qos,
+                                       bool retained = false);
     
     /**
      * @brief 订阅主题
@@ -120,7 +121,7 @@ public:
      * @param qos QoS等级
      * @return Result<bool> 订阅结果
      */
-    Result<bool> subscribe(const std::string& topic, QoS qos);
+    [[nodiscard]] Result<bool> subscribe(std::string_view topic, QoS qos);
     
     /**
      * @brief 取消订阅
@@ -128,30 +129,30 @@ public:
      * @param topic 主题
      * @return Result<bool> 取消订阅结果
      */
-    Result<bool> unsubscribe(const std::string& topic);
+    [[nodiscard]] Result<bool> unsubscribe(std::string_view topic);
     
     /**
      * @brief 设置消息接收回调
      * 
      * @param callback 回调函数
      */
-    void setMessageCallback(std::function<void(const std::string& topic,
-                                               const std::string& payload,
-                                               QoS qos)> callback);
+    void setMessageCallback(const std::function<void(std::string_view topic,
+                                                     std::string_view payload,
+                                                     QoS qos)>& callback);
     
     /**
      * @brief 设置连接状态回调
      * 
      * @param callback 回调函数
      */
-    void setConnectionCallback(std::function<void(bool connected)> callback);
+    void setConnectionCallback(const std::function<void(bool connected)>& callback);
     
     /**
      * @brief 处理网络I/O（需要在事件循环中调用）
      * 
      * @return Result<bool> 处理结果
      */
-    Result<bool> processNetwork();
+    [[nodiscard]] Result<bool> processNetwork() const;
     
     /**
      * @brief 清理资源
@@ -165,7 +166,7 @@ private:
      * 
      * @return Result<bool> 创建结果
      */
-    Result<bool> createClient();
+    [[nodiscard]] Result<bool> createClient();
     
     /**
      * @brief 配置连接参数
@@ -173,14 +174,14 @@ private:
      * @param connect 连接参数结构体（输出）
      * @return Result<bool> 配置结果
      */
-    Result<bool> configureConnection(MqttConnect& connect);
+    [[nodiscard]] Result<bool> configureConnection(MqttConnect& connect);
     
     /**
      * @brief 配置TLS
      * 
      * @return Result<bool> 配置结果
      */
-    Result<bool> configureTLS();
+    [[nodiscard]] Result<bool> configureTLS();
     
     /**
      * @brief 网络连接回调（wolfMQTT回调）
@@ -236,7 +237,7 @@ private:
     
     // wolfMQTT客户端实例（C结构体）
     std::unique_ptr<MqttClient> wolfClient_;
-    MqttNet net_;  // 网络抽象层
+    MqttNet net_{};  // 网络抽象层
     
     // 缓冲区
     std::vector<byte> txBuffer_;
@@ -247,14 +248,14 @@ private:
         int socketFd;
         bool isTLS;
         // 其他网络相关数据
-    } networkContext_;
+    } networkContext_{};
 #endif
     
     // 配置
     const MqttConfig& config_;
     
     // 回调函数
-    std::function<void(const std::string&, const std::string&, QoS)> messageCallback_;
+    std::function<void(std::string_view, std::string_view, QoS)> messageCallback_;
     std::function<void(bool)> connectionCallback_;
     
     // 消息接收线程

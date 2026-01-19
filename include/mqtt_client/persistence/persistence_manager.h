@@ -62,7 +62,7 @@ public:
      */
     explicit PersistenceManager(
         const std::string& storagePath,
-        std::shared_ptr<StorageEngine> storageEngine = nullptr);
+        const std::shared_ptr<StorageEngine> &storageEngine = nullptr);
     
     /**
      * @brief 析构函数
@@ -74,93 +74,93 @@ public:
     /**
      * @brief 保存发送队列
      */
-    Result<bool> saveSendQueue(const std::vector<MqttMessage>& messages);
+    [[nodiscard]] Result<bool> saveSendQueue(const std::vector<MqttMessage>& messages);
     
     /**
      * @brief 加载发送队列
      */
-    Result<std::vector<MqttMessage>> loadSendQueue();
+    [[nodiscard]] Result<std::vector<MqttMessage>> loadSendQueue();
     
     /**
      * @brief 保存接收队列
      */
-    Result<bool> saveReceiveQueue(const std::vector<MqttMessage>& messages);
+    [[nodiscard]] Result<bool> saveReceiveQueue(const std::vector<MqttMessage>& messages);
     
     /**
      * @brief 加载接收队列
      */
-    Result<std::vector<MqttMessage>> loadReceiveQueue();
+    [[nodiscard]] Result<std::vector<MqttMessage>> loadReceiveQueue();
     
     // ========== 订阅信息持久化 ==========
     
     /**
      * @brief 保存订阅信息
      */
-    Result<bool> saveSubscriptions(const std::vector<Subscription>& subs);
+    [[nodiscard]] Result<bool> saveSubscriptions(const std::vector<Subscription>& subs);
     
     /**
      * @brief 加载订阅信息
      */
-    Result<std::vector<Subscription>> loadSubscriptions();
+    [[nodiscard]] Result<std::vector<Subscription>> loadSubscriptions();
     
     // ========== 状态持久化 ==========
     
     /**
      * @brief 保存客户端状态
      */
-    Result<bool> saveClientState(const ClientState& state);
+    [[nodiscard]] Result<bool> saveClientState(const ClientState& state);
     
     /**
      * @brief 加载客户端状态
      */
-    Result<ClientState> loadClientState();
+    [[nodiscard]] Result<ClientState> loadClientState();
     
     // ========== 幂等去重持久化 ==========
     
     /**
      * @brief 保存幂等去重记录
      */
-    Result<bool> saveIdempotencyRecords(const std::map<std::string, time_t>& records);
+    [[nodiscard]] Result<bool> saveIdempotencyRecords(const std::map<std::string, time_t>& records);
     
     /**
      * @brief 加载幂等去重记录
      */
-    Result<std::map<std::string, time_t>> loadIdempotencyRecords();
+    [[nodiscard]] Result<std::map<std::string, time_t>> loadIdempotencyRecords();
     
     // ========== 清理 ==========
     
     /**
      * @brief 清理所有持久化数据
      */
-    Result<bool> clear();
+    [[nodiscard]] Result<bool> clear();
     
     /**
      * @brief 清理过期的持久化数据
      */
-    Result<bool> cleanupExpired(time_t expiryTime);
+    [[nodiscard]] Result<bool> cleanupExpired(time_t expiryTime);
     
     // ========== 快速恢复 ==========
     
     /**
      * @brief 快速恢复所有数据
      */
-    Result<RecoveryData> fastRecover();
+    [[nodiscard]] Result<RecoveryData> fastRecover();
     
     /**
      * @brief 检查是否有待恢复的数据
      */
-    bool hasRecoveryData() const;
+    [[nodiscard]] bool hasRecoveryData() const;
     
 private:
     std::string storagePath_;
     std::shared_ptr<StorageEngine> storageEngine_;
     
-    // 文件路径
-    std::string getSendQueuePath() const;
-    std::string getReceiveQueuePath() const;
-    std::string getSubscriptionsPath() const;
-    std::string getClientStatePath() const;
-    std::string getIdempotencyRecordsPath() const;
+    // 文件路径（静态方法，不依赖实例状态）
+    static std::string getSendQueuePath();
+    static std::string getReceiveQueuePath();
+    static std::string getSubscriptionsPath();
+    static std::string getClientStatePath();
+    static std::string getIdempotencyRecordsPath();
 };
 
 } // namespace mqtt_client

@@ -7,8 +7,9 @@
 #include "mqtt_client/connection/connection_manager.h"
 #include "mqtt_client/adapter/wolfmqtt_adapter.h"
 #include "mqtt_client/logger/logger_interface.h"
-#include <algorithm>
 #include <chrono>
+
+using namespace std::chrono_literals;
 
 namespace mqtt_client {
 
@@ -25,8 +26,7 @@ MqttMessageManager::MqttMessageManager(MqttConnectionManager& connectionManager,
 
 void MqttMessageManager::startThread() {
     // 使用原子操作和双重检查锁定模式，确保线程只启动一次
-    bool expected = false;
-    if (running_.compare_exchange_strong(expected, true)) {
+    if (bool expected = false; running_.compare_exchange_strong(expected, true)) {
         messageThread_ = std::thread(&MqttMessageManager::messageThread, this);
     }
 }
@@ -57,7 +57,7 @@ Result<bool> MqttMessageManager::publish(const std::string& topic,
     }
     
     // 检查消息大小
-    size_t maxSize = config_.mqtt5.maximumPacketSize > 0
+    const size_t maxSize = config_.mqtt5.maximumPacketSize > 0
                      ? config_.mqtt5.maximumPacketSize
                      : 256 * 1024;  // 默认256KB
     if (payload.length() > maxSize) {
@@ -106,9 +106,9 @@ Result<bool> MqttMessageManager::publish(const std::string& topic,
 
 Result<bool> MqttMessageManager::publishSync(const std::string& topic,
                                             const std::string& payload,
-                                            QoS qos,
-                                            bool retained,
-                                            int timeoutMs) {
+                                            const QoS qos,
+                                            const bool retained,
+                                            [[maybe_unused]] int timeoutMs) {
     // 同步发布：先发布，然后等待完成（简化实现）
     // 实际实现中可以使用future/promise机制
     return publish(topic, payload, qos, retained);
@@ -116,9 +116,9 @@ Result<bool> MqttMessageManager::publishSync(const std::string& topic,
 
 Result<bool> MqttMessageManager::queueMessage(const std::string& topic,
                                               const std::string& payload,
-                                              QoS qos,
-                                              bool retained,
-                                              int priority) {
+                                              const QoS qos,
+                                              const bool retained,
+                                              const int priority) {
     // 确保线程已启动
     startThread();
     
@@ -129,22 +129,54 @@ Result<bool> MqttMessageManager::queueMessage(const std::string& topic,
     msg.retained = retained;
     msg.priority = priority;
     msg.timestamp = std::time(nullptr);
-    std::lock_guard<std::mutex> lock(queueMutex_);
+    std::lock_guard lock(queueMutex_);
     
-    // 检查队列大小
+    // 检查队列大小（工业级策略：明确的丢弃规则）
     if (queue_.size() >= config_.messageQueue.maxSendQueueSize) {
-        // 队列满，根据优先级决定是否丢弃
-        if (msg.priority < 5) {  // 低优先级消息
+        // 1. 低优先级消息：直接丢弃新消息，保护队列中已有的更重要消息
+        if (msg.priority < 5) {  // 低优先级消息阈值，可根据配置调整
             LOG_WARN("消息队列已满，丢弃低优先级消息: " + msg.topic);
             return Result<bool>::Failure(
                 MqttError(MqttErrorCode::QUEUE_FULL,
-                         "消息队列已满"));
-        } else {
-            // 高优先级消息，丢弃队列中最旧的低优先级消息
-            // 注意：priority_queue不支持直接遍历，这里简化处理
-            // 实际实现中可以使用deque等容器
-            LOG_WARN("消息队列已满，但保留高优先级消息: " + msg.topic);
+                         "消息队列已满，已丢弃低优先级消息"));
         }
+
+        // 2. 高优先级消息：尝试淘汰队列中优先级最低且最早进入队列的消息
+        //    这样可以在队列上限内优先保留更重要的消息
+        std::vector<QueuedMessage> buffer;
+        buffer.reserve(queue_.size());
+
+        // 将当前队列元素转移到临时缓冲区
+        while (!queue_.empty()) {
+            buffer.push_back(queue_.top());
+            queue_.pop();
+        }
+
+        // 选择一个要淘汰的候选：优先级最低，其次时间戳最早
+        auto dropIt = buffer.begin();
+        for (auto it = buffer.begin(); it != buffer.end(); ++it) {
+            if (it->priority < dropIt->priority ||
+                (it->priority == dropIt->priority && it->timestamp < dropIt->timestamp)) {
+                dropIt = it;
+            }
+        }
+
+        const QueuedMessage dropped = *dropIt;
+
+        // 记录被淘汰的消息 （便于运维排查）
+        LOG_WARN("消息队列已满，淘汰低优先级消息: topic=" + dropped.topic +
+                 ", priority=" + std::to_string(dropped.priority) +
+                 "; 保留新高优先级消息: topic=" + msg.topic +
+                 ", priority=" + std::to_string(msg.priority));
+
+        // 从缓冲区中移除被淘汰的消息
+        buffer.erase(dropIt);
+
+        // 重新构建优先级队列（不含被淘汰消息）
+        for (const auto& q : buffer) {
+            queue_.push(q);
+        }
+        // 注意：此时队列大小为 maxSendQueueSize - 1，为新消息留出了空间
     }
     
     // 确保时间戳已设置
@@ -157,7 +189,7 @@ Result<bool> MqttMessageManager::queueMessage(const std::string& topic,
     
     // 更新统计
     {
-        std::lock_guard<std::mutex> statsLock(statsMutex_);
+        std::lock_guard statsLock(statsMutex_);
         stats_.totalQueued++;
     }
     
@@ -169,7 +201,7 @@ Result<bool> MqttMessageManager::queueMessage(const std::string& topic,
 
 size_t MqttMessageManager::getQueueSize() const {
     // 使用try_to_lock避免在析构时阻塞
-    std::unique_lock<std::mutex> lock(queueMutex_, std::try_to_lock);
+    const std::unique_lock lock(queueMutex_, std::try_to_lock);
     if (lock.owns_lock()) {
         return queue_.size();
     }
@@ -178,7 +210,7 @@ size_t MqttMessageManager::getQueueSize() const {
 }
 
 void MqttMessageManager::clearQueue() {
-    std::lock_guard<std::mutex> lock(queueMutex_);
+    std::lock_guard lock(queueMutex_);
     
     // priority_queue没有clear方法，需要逐个pop
     while (!queue_.empty()) {
@@ -187,7 +219,7 @@ void MqttMessageManager::clearQueue() {
 }
 
 void MqttMessageManager::processQueue() {
-    std::lock_guard<std::mutex> lock(queueMutex_);
+    std::lock_guard lock(queueMutex_);
     
     // 处理队列中的所有消息
     while (!queue_.empty() && connectionManager_.isConnected()) {
@@ -195,8 +227,7 @@ void MqttMessageManager::processQueue() {
         queue_.pop();
         
         // 发送消息
-        auto result = sendMessage(msg);
-        if (!result) {
+        if (const auto result = sendMessage(msg); !result) {
             // 发送失败，如果未超过重试次数，重新入队
             if (msg.retryCount < config_.messageQueue.maxRetry) {
                 msg.retryCount++;
@@ -204,7 +235,7 @@ void MqttMessageManager::processQueue() {
                 
                 // 更新统计
                 {
-                    std::lock_guard<std::mutex> statsLock(statsMutex_);
+                    std::lock_guard statsLock(statsMutex_);
                     stats_.totalRetried++;
                 }
             } else {
@@ -219,21 +250,20 @@ void MqttMessageManager::processQueue() {
 }
 
 MqttMessageManager::MessageStats MqttMessageManager::getStats() const {
-    std::lock_guard<std::mutex> lock(statsMutex_);
+    std::lock_guard lock(statsMutex_);
     
     MessageStats stats = stats_;
     
     // 计算成功率
-    uint64_t total = stats.totalPublished + stats.totalFailed;
-    if (total > 0) {
-        stats.successRate = static_cast<double>(stats.totalPublished) / total;
+    if (const uint64_t total = stats.totalPublished + stats.totalFailed; total > 0) {
+        stats.successRate = static_cast<double>(stats.totalPublished) / static_cast<double>(total);
     }
     
     return stats;
 }
 
 void MqttMessageManager::resetStats() {
-    std::lock_guard<std::mutex> lock(statsMutex_);
+    std::lock_guard lock(statsMutex_);
     stats_ = MessageStats();
 }
 
@@ -266,7 +296,7 @@ Result<bool> MqttMessageManager::sendMessage(const QueuedMessage& msg) {
 }
 
 void MqttMessageManager::processBatch() {
-    std::lock_guard<std::mutex> lock(batchMutex_);
+    std::lock_guard lock(batchMutex_);
     
     if (batchQueue_.empty()) {
         return;
@@ -274,7 +304,9 @@ void MqttMessageManager::processBatch() {
     
     // 批量发送消息
     for (const auto& msg : batchQueue_) {
-        sendMessage(msg);
+        if (const auto result = sendMessage(msg); !result.success) {
+            LOG_ERROR("批量消息中存在失败消息：" + msg.messageId);
+        }
     }
     
     // 清空批量队列
@@ -283,7 +315,7 @@ void MqttMessageManager::processBatch() {
 
 void MqttMessageManager::messageThread() {
     while (running_.load()) {
-        std::unique_lock<std::mutex> lock(queueMutex_);
+        std::unique_lock lock(queueMutex_);
         
         // 等待队列中有消息或停止信号
         queueCV_.wait(lock, [this] {
@@ -311,12 +343,13 @@ void MqttMessageManager::messageThread() {
                 lock.unlock();
                 
                 // 发送消息
-                auto result = sendMessage(msg);
-                if (!result) {
+                if (const auto result = sendMessage(msg); !result) {
                     // 发送失败，如果未超过重试次数，重新入队
                     if (msg.retryCount < config_.messageQueue.maxRetry) {
                         msg.retryCount++;
-                        queueMessage(msg.topic, msg.payload, msg.qos, msg.retained, msg.priority);
+                        if (auto sendResult = queueMessage(msg.topic, msg.payload, msg.qos, msg.retained, msg.priority); !sendResult.success) {
+                            LOG_ERROR("消息重试入队失败，丢弃：" + msg.messageId);
+                        }
                     } else {
                         LOG_ERROR("消息重试次数超限，丢弃: " + msg.topic);
                         updateStats(false);
@@ -325,14 +358,14 @@ void MqttMessageManager::messageThread() {
             } else {
                 // 未连接，等待一段时间后重试
                 lock.unlock();
-                std::this_thread::sleep_for(std::chrono::milliseconds(100));
+                std::this_thread::sleep_for(100ms);
             }
         }
     }
 }
 
-void MqttMessageManager::updateStats(bool success) {
-    std::lock_guard<std::mutex> lock(statsMutex_);
+void MqttMessageManager::updateStats(const bool success) {
+    std::lock_guard lock(statsMutex_);
     
     if (success) {
         stats_.totalPublished++;

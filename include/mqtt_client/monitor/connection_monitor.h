@@ -71,14 +71,14 @@ public:
      * @return true 正在运行
      * @return false 未运行
      */
-    bool isRunning() const;
+    [[nodiscard]] bool isRunning() const;
     
     /**
      * @brief 获取连接统计信息
      * 
      * @return ConnectionStats 统计信息
      */
-    ConnectionStats getStats() const;
+    [[nodiscard]] ConnectionStats getStats() const;
     
     /**
      * @brief 设置断开连接回调

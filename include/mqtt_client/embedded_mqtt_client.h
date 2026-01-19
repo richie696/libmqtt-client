@@ -13,6 +13,7 @@
 #include "mqtt_client/core/error.h"
 #include "mqtt_client/config/config.h"
 #include <string>
+#include <string_view>
 #include <vector>
 #include <map>
 #include <functional>
@@ -22,8 +23,8 @@
 
 // 前向声明回调类型
 namespace mqtt_client {
-    using MessageCallback = std::function<void(const std::string& topic,
-                                              const std::string& payload,
+    using MessageCallback = std::function<void(std::string_view topic,
+                                              std::string_view payload,
                                               const MqttProperties& properties)>;
     using ConnectionCallback = std::function<void(ConnectionState status,
                                                   const std::string& reason)>;
@@ -94,7 +95,7 @@ public:
      * @param config MQTT配置对象
      * @return Result<bool> 初始化结果
      */
-    Result<bool> initialize(const MqttConfig& config);
+    [[nodiscard]] Result<bool> initialize(const MqttConfig& config);
     
     /**
      * @brief 检查是否已初始化
@@ -119,14 +120,14 @@ public:
      * @param config 新的配置对象
      * @return Result<bool> 更新结果
      */
-    Result<bool> updateConfig(const MqttConfig& config);
+    [[nodiscard]] Result<bool> updateConfig(const MqttConfig& config);
     
     /**
      * @brief 获取当前配置
      * 
      * @return const MqttConfig& 当前配置的引用
      */
-    const MqttConfig& getConfig() const noexcept;
+    [[nodiscard]] const MqttConfig& getConfig() const noexcept;
     
     // ========== 连接管理 ==========
     
@@ -135,7 +136,7 @@ public:
      * 
      * @return Result<bool> 连接结果
      */
-    Result<bool> connect();
+    [[nodiscard]] Result<bool> connect();
     
     /**
      * @brief 断开连接
@@ -143,14 +144,14 @@ public:
      * @param force 是否强制断开（不发送DISCONNECT包）
      * @return Result<bool> 断开结果
      */
-    Result<bool> disconnect(bool force = false);
+    [[nodiscard]] Result<bool> disconnect(bool force = false);
     
     /**
      * @brief 重新连接
      * 
      * @return Result<bool> 重连结果
      */
-    Result<bool> reconnect();
+    [[nodiscard]] Result<bool> reconnect();
     
     /**
      * @brief 检查是否已连接
@@ -158,21 +159,21 @@ public:
      * @return true 已连接
      * @return false 未连接
      */
-    bool isConnected() const noexcept;
+    [[nodiscard]] bool isConnected() const noexcept;
     
     /**
      * @brief 获取连接状态
      * 
      * @return ConnectionState 连接状态
      */
-    ConnectionState getState() const;
+    [[nodiscard]] ConnectionState getState() const;
     
     /**
      * @brief 获取网络质量
      * 
      * @return NetworkQuality 网络质量
      */
-    NetworkQuality getNetworkQuality() const;
+    [[nodiscard]] NetworkQuality getNetworkQuality() const;
     
     // ========== 消息发布 ==========
     
@@ -185,10 +186,10 @@ public:
      * @param retain 是否保留消息
      * @return Result<bool> 发布结果
      */
-    Result<bool> publish(const std::string& topic,
-                        const std::string& payload,
-                        QoS qos = QoS::QOS_0,
-                        bool retain = false);
+    [[nodiscard]] Result<bool> publish(std::string_view topic,
+                                       std::string_view payload,
+                                       QoS qos = QoS::QOS_0,
+                                       bool retain = false);
     
     /**
      * @brief 发布消息（带属性，MQTT 5.0）
@@ -200,11 +201,11 @@ public:
      * @param retain 是否保留消息
      * @return Result<bool> 发布结果
      */
-    Result<bool> publish(const std::string& topic,
-                        const std::string& payload,
-                        const MqttProperties& properties,
-                        QoS qos = QoS::QOS_0,
-                        bool retain = false);
+    [[nodiscard]] Result<bool> publish(std::string_view topic,
+                                       std::string_view payload,
+                                       const MqttProperties& properties,
+                                       QoS qos = QoS::QOS_0,
+                                       bool retain = false);
     
     // ========== 消息订阅 ==========
     
@@ -216,9 +217,9 @@ public:
      * @param qos QoS等级
      * @return Result<bool> 订阅结果
      */
-    Result<bool> subscribe(const std::string& topic,
-                          MessageCallback callback,
-                          QoS qos = QoS::QOS_0);
+    [[nodiscard]] Result<bool> subscribe(std::string_view topic,
+                                         MessageCallback callback,
+                                         QoS qos = QoS::QOS_0);
     
     /**
      * @brief 取消订阅
@@ -226,14 +227,14 @@ public:
      * @param topic 主题名称
      * @return Result<bool> 取消订阅结果
      */
-    Result<bool> unsubscribe(const std::string& topic);
+    [[nodiscard]] Result<bool> unsubscribe(std::string_view topic) const;
     
     /**
      * @brief 获取已订阅的主题列表
      * 
      * @return std::vector<std::string> 已订阅的主题列表
      */
-    std::vector<std::string> getSubscribedTopics() const;
+    [[nodiscard]] std::vector<std::string> getSubscribedTopics() const;
     
     // ========== 事件回调 ==========
     
@@ -242,14 +243,14 @@ public:
      * 
      * @param callback 连接状态回调函数
      */
-    void setConnectionCallback(ConnectionCallback callback);
+    void setConnectionCallback(const ConnectionCallback &callback);
     
     /**
      * @brief 设置错误回调
      * 
      * @param callback 错误回调函数
      */
-    void setErrorCallback(ErrorCallback callback);
+    void setErrorCallback(const ErrorCallback &callback);
 
 private:
     /**
@@ -257,7 +258,7 @@ private:
      * 
      * @return Result<bool> 初始化结果
      */
-    Result<bool> initializeComponents();
+    [[nodiscard]] Result<bool> initializeComponents();
     
     /**
      * @brief 清理子组件

@@ -39,7 +39,7 @@ public:
      * @param cleanupInterval 清理间隔（秒），默认1小时
      */
     explicit IdempotencyManager(
-        std::shared_ptr<PersistenceManager> persistenceManager,
+        const std::shared_ptr<PersistenceManager> &persistenceManager,
         time_t retentionTime = 5 * 60,          // 5分钟
         time_t cleanupInterval = 3600);          // 1小时
     
@@ -58,14 +58,14 @@ public:
      * @param messageHash 消息hash值
      * @return true=已处理（重复消息），false=未处理（新消息）
      */
-    bool isDuplicate(const std::string& messageHash);
+    [[nodiscard]] bool isDuplicate(const std::string& messageHash);
     
     /**
      * @brief 标记消息已处理
      * 
      * @param messageHash 消息hash值
      */
-    Result<bool> markProcessed(const std::string& messageHash);
+    [[nodiscard]] Result<bool> markProcessed(const std::string& messageHash);
     
     /**
      * @brief 计算消息hash值
@@ -73,7 +73,7 @@ public:
      * @param message 消息对象
      * @return 消息hash值（SHA-256）
      */
-    static std::string calculateMessageHash(const MqttMessage& message);
+    [[nodiscard]] static std::string calculateMessageHash(const MqttMessage& message);
     
     /**
      * @brief 计算消息hash值（从原始数据）
@@ -83,14 +83,14 @@ public:
      * @param qos QoS级别
      * @return 消息hash值
      */
-    static std::string calculateMessageHash(const std::string& topic,
-                                           const std::string& payload,
-                                           QoS qos);
+    [[nodiscard]] static std::string calculateMessageHash(const std::string& topic,
+                                                          const std::string& payload,
+                                                          QoS qos);
     
     /**
      * @brief 获取去重数据数量
      */
-    size_t getDuplicateCount() const;
+    [[nodiscard]] size_t getDuplicateCount() const;
     
     /**
      * @brief 设置保存时间
@@ -100,22 +100,22 @@ public:
     /**
      * @brief 获取保存时间
      */
-    time_t getRetentionTime() const;
+    [[nodiscard]] time_t getRetentionTime() const;
     
     /**
      * @brief 手动触发清理
      */
-    Result<bool> cleanup();
+    [[nodiscard]] Result<bool> cleanup();
     
     /**
      * @brief 持久化去重数据
      */
-    Result<bool> persist();
+    [[nodiscard]] Result<bool> persist();
     
     /**
      * @brief 从持久化恢复
      */
-    Result<bool> recover();
+    [[nodiscard]] Result<bool> recover();
     
     /**
      * @brief 清空所有去重数据

@@ -12,39 +12,12 @@
 
 namespace mqtt_client {
 
-// 使用宏定义日志接口
-#define LOG_ERROR(msg) \
-    do { \
-        if (LoggerManager::getInstance().getLogger()) { \
-            LoggerManager::getInstance().getLogger()->log(LogLevel::ERROR, msg, __FILE__, __LINE__); \
-        } \
-    } while(0)
-
-#define LOG_WARN(msg) \
-    do { \
-        if (LoggerManager::getInstance().getLogger()) { \
-            LoggerManager::getInstance().getLogger()->log(LogLevel::WARN, msg, __FILE__, __LINE__); \
-        } \
-    } while(0)
-
-#define LOG_INFO(msg) \
-    do { \
-        if (LoggerManager::getInstance().getLogger()) { \
-            LoggerManager::getInstance().getLogger()->log(LogLevel::INFO, msg, __FILE__, __LINE__); \
-        } \
-    } while(0)
-
-#define LOG_DEBUG(msg) \
-    do { \
-        if (LoggerManager::getInstance().getLogger()) { \
-            LoggerManager::getInstance().getLogger()->log(LogLevel::DEBUG, msg, __FILE__, __LINE__); \
-        } \
-    } while(0)
-
-FileStorageEngine::FileStorageEngine(const std::string& basePath)
-    : basePath_(basePath) {
+FileStorageEngine::FileStorageEngine(std::string basePath)
+    : basePath_(std::move(basePath)) {
     // 确保基础目录存在
-    ensureDirectory(basePath_);
+    if (const auto result = ensureDirectory(basePath_); !result.success) {
+        LOG_ERROR("路径校验失败，错误原因：" + result.error.message);
+    }
 }
 
 Result<bool> FileStorageEngine::write(const std::string& key, const std::string& data) {
@@ -54,8 +27,7 @@ Result<bool> FileStorageEngine::write(const std::string& key, const std::string&
         // 确保目录存在
         std::filesystem::path path(fullPath);
         std::string dirPath = path.parent_path().string();
-        auto dirResult = ensureDirectory(dirPath);
-        if (!dirResult.success) {
+        if (auto dirResult = ensureDirectory(dirPath); !dirResult.success) {
             return Result<bool>::Failure(
                 MqttError(MqttErrorCode::PERSISTENCE_ERROR,
                          "无法创建目录: " + dirPath));
@@ -70,7 +42,8 @@ Result<bool> FileStorageEngine::write(const std::string& key, const std::string&
                          "无法打开文件写入: " + tempPath));
         }
         
-        file.write(data.c_str(), data.length());
+        // 显式转换 size_t 到 streamsize，避免窄化转换警告
+        file.write(data.c_str(), static_cast<std::streamsize>(data.length()));
         file.close();
         
         if (!file.good()) {
@@ -125,22 +98,20 @@ Result<std::string> FileStorageEngine::read(const std::string& key) {
 
 Result<bool> FileStorageEngine::remove(const std::string& key) {
     try {
-        std::string fullPath = getFullPath(key);
+        const std::string fullPath = getFullPath(key);
         
         if (!exists(key)) {
             // 文件不存在，认为删除成功
             return Result<bool>::Success(true);
         }
-        
-        bool removed = std::filesystem::remove(fullPath);
-        if (removed) {
+
+        if (std::filesystem::remove(fullPath)) {
             LOG_DEBUG("删除文件成功: " + fullPath);
             return Result<bool>::Success(true);
-        } else {
-            return Result<bool>::Failure(
-                MqttError(MqttErrorCode::PERSISTENCE_ERROR,
-                         "删除文件失败: " + fullPath));
         }
+        return Result<bool>::Failure(
+            MqttError(MqttErrorCode::PERSISTENCE_ERROR,
+                      "删除文件失败: " + fullPath));
     } catch (const std::exception& e) {
         return Result<bool>::Failure(
             MqttError(MqttErrorCode::PERSISTENCE_ERROR,
@@ -184,12 +155,12 @@ std::string FileStorageEngine::getFullPath(const std::string& key) const {
     }
     
     // 否则拼接基础路径
-    std::filesystem::path base(basePath_);
-    std::filesystem::path file(key);
+    const std::filesystem::path base(basePath_);
+    const std::filesystem::path file(key);
     return (base / file).string();
 }
 
-Result<bool> FileStorageEngine::ensureDirectory(const std::string& path) {
+    Result<bool> FileStorageEngine::ensureDirectory(const std::string& path) {
     try {
         if (path.empty()) {
             return Result<bool>::Success(true);
@@ -198,11 +169,10 @@ Result<bool> FileStorageEngine::ensureDirectory(const std::string& path) {
         if (std::filesystem::exists(path)) {
             if (std::filesystem::is_directory(path)) {
                 return Result<bool>::Success(true);
-            } else {
-                return Result<bool>::Failure(
-                    MqttError(MqttErrorCode::PERSISTENCE_ERROR,
-                             "路径已存在但不是目录: " + path));
             }
+            return Result<bool>::Failure(
+                MqttError(MqttErrorCode::PERSISTENCE_ERROR,
+                          "路径已存在但不是目录: " + path));
         }
         
         // 创建目录（包括父目录）

@@ -551,6 +551,29 @@ function Init-Submodules {
     Write-Host ""
 }
 
+# 检查 submodule 是否已构建
+function Test-SubmoduleBuilt {
+    param(
+        [string]$SubmodulePath
+    )
+    
+    if ([string]::IsNullOrEmpty($SubmodulePath)) {
+        return $false
+    }
+    
+    $submoduleDir = Join-Path $ProjectRoot $SubmodulePath
+    if (-not (Test-Path $submoduleDir)) {
+        return $false
+    }
+    
+    $installLibDir = Join-Path $submoduleDir "install\lib"
+    if ((Test-Path $installLibDir) -and (Get-ChildItem $installLibDir -Filter "*.lib" -ErrorAction SilentlyContinue)) {
+        return $true
+    }
+    
+    return $false
+}
+
 # 检查 wolfMQTT 是否已构建
 function Test-WolfMqttBuilt {
     Write-ColorOutput Blue "========== 检查 wolfMQTT 构建状态 =========="
@@ -587,7 +610,7 @@ function Build-WolfMqtt {
     Push-Location $WolfMqttDir
     
     try {
-        # 检测 wolfSSL 路径（Windows 通常需要手动指定）
+        # 检测系统安装的 wolfSSL（可选，用于 TLS 支持）
         $WolfSslPath = $null
         $possiblePaths = @(
             "C:\vcpkg\installed\x64-windows",
@@ -598,8 +621,14 @@ function Build-WolfMqtt {
         foreach ($path in $possiblePaths) {
             if (Test-Path $path) {
                 $WolfSslPath = $path
+                Write-ColorOutput Green "使用系统安装的 wolfSSL: $WolfSslPath"
                 break
             }
+        }
+        
+        if (-not $WolfSslPath) {
+            Write-ColorOutput Yellow "警告: 未找到 wolfSSL，TLS 功能将不可用"
+            Write-ColorOutput Yellow "提示: 可以使用 vcpkg 安装: vcpkg install wolfssl"
         }
         
         # 创建构建目录

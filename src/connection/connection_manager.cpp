@@ -55,7 +55,7 @@ MqttConnectionManager::~MqttConnectionManager() {
 }
 
 Result<bool> MqttConnectionManager::connect() {
-    std::lock_guard<std::mutex> lock(mutex_);
+    std::lock_guard lock(mutex_);
     
     // 检查是否已连接
     if (connected_.load()) {
@@ -63,8 +63,7 @@ Result<bool> MqttConnectionManager::connect() {
     }
     
     // 检查状态
-    ConnectionState currentState = state_.load();
-    if (currentState == ConnectionState::CONNECTING) {
+    if (const ConnectionState currentState = state_.load(); currentState == ConnectionState::CONNECTING) {
         return Result<bool>::Failure(
             MqttError(MqttErrorCode::INVALID_STATE,
                      "连接正在进行中"));
@@ -81,16 +80,14 @@ Result<bool> MqttConnectionManager::connect() {
     updateState(ConnectionState::CONNECTING);
     
     // 初始化适配器（如果尚未初始化）
-    auto initResult = adapter_->initialize();
-    if (!initResult) {
+    if (auto initResult = adapter_->initialize(); !initResult) {
         updateState(ConnectionState::DISCONNECTED);
         handleConnectFailure("适配器初始化失败: " + initResult.error.message);
         return initResult;
     }
     
     // 执行连接
-    auto connectResult = adapter_->connect();
-    if (!connectResult) {
+    if (auto connectResult = adapter_->connect(); !connectResult) {
         updateState(ConnectionState::DISCONNECTED);
         handleConnectFailure("连接失败: " + connectResult.error.message);
         return connectResult;
@@ -108,7 +105,7 @@ Result<bool> MqttConnectionManager::connect() {
 
 Result<bool> MqttConnectionManager::disconnect() {
     // 使用try_lock避免在析构时死锁
-    std::unique_lock<std::mutex> lock(mutex_, std::try_to_lock);
+    const std::unique_lock lock(mutex_, std::try_to_lock);
     if (!lock.owns_lock()) {
         // 无法获取锁，可能正在析构，直接返回成功
         connected_.store(false);
@@ -126,8 +123,7 @@ Result<bool> MqttConnectionManager::disconnect() {
     
     // 执行断开
     if (adapter_) {
-        auto disconnectResult = adapter_->disconnect();
-        if (!disconnectResult) {
+        if (const auto disconnectResult = adapter_->disconnect(); !disconnectResult) {
             // 即使断开失败，也标记为已断开
             LOG_WARN("断开连接时出错: " + disconnectResult.error.message);
         }
@@ -141,11 +137,14 @@ Result<bool> MqttConnectionManager::disconnect() {
 }
 
 Result<bool> MqttConnectionManager::reconnect() {
-    std::lock_guard<std::mutex> lock(mutex_);
+    std::lock_guard lock(mutex_);
     
     // 先断开当前连接
     if (connected_.load()) {
-        disconnect();
+        if (const auto result = disconnect(); !result) {
+            LOG_ERROR("断开当前连接失败: " + result.error.message);
+            return Result<bool>::Failure(result.error);
+        }
     }
     
     // 增加重连计数
@@ -186,18 +185,18 @@ void MqttConnectionManager::resetReconnectCount() {
     reconnectCount_.store(0);
 }
 
-void MqttConnectionManager::setOnConnected(std::function<void()> callback) {
-    std::lock_guard<std::mutex> lock(mutex_);
+void MqttConnectionManager::setOnConnected(const std::function<void()> &callback) {
+    std::lock_guard lock(mutex_);
     onConnected_ = callback;
 }
 
-void MqttConnectionManager::setOnConnectionLost(std::function<void(const std::string&)> callback) {
-    std::lock_guard<std::mutex> lock(mutex_);
+void MqttConnectionManager::setOnConnectionLost(const std::function<void(const std::string&)> &callback) {
+    std::lock_guard lock(mutex_);
     onConnectionLost_ = callback;
 }
 
-void MqttConnectionManager::setOnConnectFailure(std::function<void(const std::string&)> callback) {
-    std::lock_guard<std::mutex> lock(mutex_);
+void MqttConnectionManager::setOnConnectFailure(const std::function<void(const std::string&)> &callback) {
+    std::lock_guard lock(mutex_);
     onConnectFailure_ = callback;
 }
 

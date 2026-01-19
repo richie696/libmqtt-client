@@ -9,6 +9,8 @@
 #include <chrono>
 #include <random>
 
+using namespace std::chrono_literals;
+
 namespace mqtt_client {
 
 ReconnectManager::ReconnectManager(const MqttConfig::ReconnectConfig& config)
@@ -25,7 +27,7 @@ ReconnectManager::~ReconnectManager() {
 }
 
 bool ReconnectManager::startReconnect(std::function<bool()> connectFunc) {
-    std::lock_guard<std::mutex> lock(mutex_);
+    std::lock_guard lock(mutex_);
     
     if (reconnecting_.load()) {
         LOG_DEBUG("重连已在进行中");
@@ -43,7 +45,7 @@ bool ReconnectManager::startReconnect(std::function<bool()> connectFunc) {
 
 void ReconnectManager::stopReconnect() {
     {
-        std::lock_guard<std::mutex> lock(mutex_);
+        std::lock_guard lock(mutex_);
         
         if (!reconnecting_.load()) {
             return;
@@ -80,22 +82,22 @@ long ReconnectManager::getNextRetryInterval() const {
 }
 
 void ReconnectManager::updateConfig(const MqttConfig::ReconnectConfig& newConfig) {
-    std::lock_guard<std::mutex> lock(mutex_);
+    std::lock_guard lock(mutex_);
     config_ = newConfig;
 }
 
 void ReconnectManager::resetAttempts() {
-    std::lock_guard<std::mutex> lock(mutex_);
+    std::lock_guard lock(mutex_);
     attemptCount_.store(0);
     totalRetryTime_.store(0);
 }
 
 void ReconnectManager::setOnReconnectAttempt(std::function<void(int, int, long)> callback) {
-    std::lock_guard<std::mutex> lock(mutex_);
+    std::lock_guard lock(mutex_);
     onReconnectAttempt_ = callback;
 }
 
-long ReconnectManager::calculateBackoffInterval(int attempt) const {
+long ReconnectManager::calculateBackoffInterval(int attempt) const noexcept {
     long interval = config_.baseInterval;
     
     if (config_.enableExponentialBackoff) {
@@ -110,7 +112,7 @@ long ReconnectManager::calculateBackoffInterval(int attempt) const {
     
     // 添加随机抖动: interval * (minJitter ~ maxJitter)
     if (config_.enableJitter) {
-        std::lock_guard<std::mutex> lock(randomMutex_);
+        std::lock_guard lock(randomMutex_);
         std::mt19937 gen(randomDevice_());
         std::uniform_real_distribution<> dis(config_.minJitter, config_.maxJitter);
         double jitterFactor = dis(gen);
@@ -153,8 +155,8 @@ void ReconnectManager::reconnectThread(std::function<bool()> connectFunc) {
             }
             
             // 等待退避间隔（可被中断）
-            std::unique_lock<std::mutex> lock(mutex_);
-            cv_.wait_for(lock, std::chrono::milliseconds(interval), [this] {
+            std::unique_lock lock(mutex_);
+            cv_.wait_for(lock, interval * 1ms, [this] {
                 return shouldStop_.load();
             });
             

@@ -35,7 +35,7 @@ struct Result {
     /**
      * @brief 成功构造函数
      */
-    static Result Success(const T& val) {
+    [[nodiscard]] static Result Success(const T& val) {
         Result result;
         result.success = true;
         result.value = val;
@@ -46,7 +46,7 @@ struct Result {
     /**
      * @brief 成功构造函数（移动语义）
      */
-    static Result Success(T&& val) {
+    [[nodiscard]] static Result Success(T&& val) {
         Result result;
         result.success = true;
         result.value = std::move(val);
@@ -57,7 +57,7 @@ struct Result {
     /**
      * @brief 失败构造函数
      */
-    static Result Failure(MqttErrorCode code, const std::string& message, const std::string& details = "") {
+    [[nodiscard]] static Result Failure(MqttErrorCode code, const std::string& message, const std::string& details = "") {
         Result result;
         result.success = false;
         result.error = MqttError(code, message, details);
@@ -67,7 +67,7 @@ struct Result {
     /**
      * @brief 失败构造函数（使用MqttError）
      */
-    static Result Failure(const MqttError& err) {
+    [[nodiscard]] static Result Failure(const MqttError& err) {
         Result result;
         result.success = false;
         result.error = err;
@@ -77,7 +77,7 @@ struct Result {
     /**
      * @brief 失败构造函数（使用错误码和消息）
      */
-    static Result Failure(MqttErrorCode code, const std::string& message) {
+    [[nodiscard]] static Result Failure(MqttErrorCode code, const std::string& message) {
         return Failure(code, message, "");
     }
     
@@ -133,7 +133,7 @@ struct Result<void> {
     /**
      * @brief 成功构造函数
      */
-    static Result Success() {
+    [[nodiscard]] static Result Success() {
         Result result;
         result.success = true;
         result.error = MqttError(MqttErrorCode::SUCCESS, "");
@@ -143,7 +143,7 @@ struct Result<void> {
     /**
      * @brief 失败构造函数
      */
-    static Result Failure(MqttErrorCode code, const std::string& message, const std::string& details = "") {
+    [[nodiscard]] static Result Failure(MqttErrorCode code, const std::string& message, const std::string& details = "") {
         Result result;
         result.success = false;
         result.error = MqttError(code, message, details);
@@ -153,7 +153,7 @@ struct Result<void> {
     /**
      * @brief 失败构造函数（使用MqttError）
      */
-    static Result Failure(const MqttError& err) {
+    [[nodiscard]] static Result Failure(const MqttError& err) {
         Result result;
         result.success = false;
         result.error = err;

@@ -73,21 +73,21 @@ public:
      * @return true 正在运行
      * @return false 未运行
      */
-    bool isRunning() const;
+    [[nodiscard]] bool isRunning() const;
     
     /**
      * @brief 获取心跳统计信息
      * 
      * @return HeartbeatStats 统计信息
      */
-    HeartbeatStats getStats() const;
+    [[nodiscard]] HeartbeatStats getStats() const;
     
     /**
      * @brief 手动发送心跳
      * 
      * @return bool 发送结果
      */
-    bool sendHeartbeat();
+    [[nodiscard]] bool sendHeartbeat();
 
 private:
     /**

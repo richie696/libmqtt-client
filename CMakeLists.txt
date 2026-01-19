@@ -372,6 +372,7 @@ if(USE_FETCHCONTENT)
                         if(WOLFMQTT_OPTIONS MATCHES "#define ENABLE_MQTT_TLS")
                             message(STATUS "检测到wolfMQTT已启用TLS支持，查找wolfSSL库...")
                             
+                            # 查找系统安装的 wolfSSL
                             find_library(WOLFSSL_LIBRARY
                                 NAMES wolfssl
                                 PATHS
@@ -381,11 +382,26 @@ if(USE_FETCHCONTENT)
                             )
                             
                             if(WOLFSSL_LIBRARY)
-                                target_link_libraries(mqtt_client PRIVATE ${WOLFSSL_LIBRARY})
-                                target_include_directories(mqtt_client PRIVATE /opt/homebrew/opt/wolfssl/include)
-                                target_compile_definitions(mqtt_client PRIVATE ENABLE_MQTT_TLS=1)
-                                message(STATUS "  ✓ wolfSSL库已链接: ${WOLFSSL_LIBRARY}")
-                                message(STATUS "  ✓ TLS支持已启用")
+                                find_path(WOLFSSL_INCLUDE_DIR
+                                    NAMES wolfssl/openssl/sha.h
+                                    PATHS
+                                        /opt/homebrew/opt/wolfssl/include
+                                        /usr/local/include
+                                        /usr/include
+                                )
+                                
+                                if(WOLFSSL_INCLUDE_DIR)
+                                    target_link_libraries(mqtt_client PRIVATE ${WOLFSSL_LIBRARY})
+                                    target_include_directories(mqtt_client PRIVATE ${WOLFSSL_INCLUDE_DIR})
+                                    target_compile_definitions(mqtt_client PRIVATE ENABLE_MQTT_TLS=1)
+                                    message(STATUS "  ✓ wolfSSL库已链接: ${WOLFSSL_LIBRARY}")
+                                    message(STATUS "  ✓ wolfSSL头文件目录: ${WOLFSSL_INCLUDE_DIR}")
+                                    message(STATUS "  ✓ TLS支持已启用")
+                                else()
+                                    message(WARNING "  ⚠ 找到 wolfSSL 库但未找到头文件，TLS 功能将不可用")
+                                endif()
+                            else()
+                                message(WARNING "  ⚠ 未找到 wolfSSL 库，TLS 功能将不可用")
                             endif()
                         endif()
                     endif()
@@ -482,21 +498,49 @@ if(USE_FETCHCONTENT)
         message(STATUS "Google Test已配置")
     endif()
     
-    # fmt - 格式化库（如果需要）
-    option(ENABLE_FMT "Enable fmt library" OFF)
-    if(ENABLE_FMT)
-        message(STATUS "配置fmt (FetchContent)...")
+    # fmt - 格式化库（必需依赖，使用FetchContent）
+    message(STATUS "配置fmt (FetchContent)...")
+    
+    FetchContent_Declare(
+        fmt
+        GIT_REPOSITORY https://github.com/fmtlib/fmt.git
+        GIT_TAG        10.1.1
+    )
+    
+    FetchContent_MakeAvailable(fmt)
+    
+    target_link_libraries(mqtt_client PRIVATE fmt::fmt)
+    message(STATUS "fmt已配置")
+    
+    # yaml-cpp - YAML解析库（可选）
+    option(ENABLE_YAML "Enable yaml-cpp support" ON)
+    if(ENABLE_YAML)
+        message(STATUS "配置yaml-cpp (FetchContent)...")
         
         FetchContent_Declare(
-            fmt
-            GIT_REPOSITORY https://github.com/fmtlib/fmt.git
-            GIT_TAG        10.1.1
+            yaml-cpp
+            GIT_REPOSITORY https://github.com/jbeder/yaml-cpp.git
+            GIT_TAG        master  # 使用 master 分支，已修复 CMake 兼容性问题
+            GIT_SHALLOW    TRUE
         )
         
-        FetchContent_MakeAvailable(fmt)
+        # 使用 Populate + add_subdirectory 方式，可以在配置前设置策略
+        FetchContent_GetProperties(yaml-cpp)
+        if(NOT yaml-cpp_POPULATED)
+            FetchContent_Populate(yaml-cpp)
+            
+            # 在 add_subdirectory 之前，设置策略以兼容旧版本的 cmake_minimum_required
+            # 这允许 yaml-cpp 使用较旧的 CMake 版本要求
+            if(POLICY CMP0129)
+                cmake_policy(SET CMP0129 OLD)
+            endif()
+            
+            add_subdirectory(${yaml-cpp_SOURCE_DIR} ${yaml-cpp_BINARY_DIR} EXCLUDE_FROM_ALL)
+        endif()
         
-        target_link_libraries(mqtt_client PRIVATE fmt::fmt)
-        message(STATUS "fmt已配置")
+        target_link_libraries(mqtt_client PRIVATE yaml-cpp)
+        target_compile_definitions(mqtt_client PRIVATE ENABLE_YAML=1)
+        message(STATUS "yaml-cpp已配置")
     endif()
     
     message(STATUS "==========================================")
@@ -578,14 +622,36 @@ if(NOT USE_FETCHCONTENT)
                             /usr/lib
                     )
                     
-                    if(WOLFSSL_LIBRARY)
-                        target_link_libraries(mqtt_client PRIVATE ${WOLFSSL_LIBRARY})
-                        target_include_directories(mqtt_client PRIVATE /opt/homebrew/opt/wolfssl/include)
-                        target_compile_definitions(mqtt_client PRIVATE ENABLE_MQTT_TLS=1)
-                        message(STATUS "  ✓ wolfSSL库已链接: ${WOLFSSL_LIBRARY}")
-                        message(STATUS "  ✓ TLS支持已启用")
+                    # 查找系统安装的 wolfSSL
+                    find_library(WOLFSSL_LIBRARY_FOUND
+                        NAMES wolfssl
+                        PATHS
+                            /opt/homebrew/opt/wolfssl/lib
+                            /usr/local/lib
+                            /usr/lib
+                    )
+                    
+                    if(WOLFSSL_LIBRARY_FOUND)
+                        find_path(WOLFSSL_INCLUDE_DIR_FOUND
+                            NAMES wolfssl/openssl/sha.h
+                            PATHS
+                                /opt/homebrew/opt/wolfssl/include
+                                /usr/local/include
+                                /usr/include
+                        )
+                        
+                        if(WOLFSSL_INCLUDE_DIR_FOUND)
+                            target_link_libraries(mqtt_client PRIVATE ${WOLFSSL_LIBRARY_FOUND})
+                            target_include_directories(mqtt_client PRIVATE ${WOLFSSL_INCLUDE_DIR_FOUND})
+                            target_compile_definitions(mqtt_client PRIVATE ENABLE_MQTT_TLS=1)
+                            message(STATUS "  ✓ wolfSSL库已链接: ${WOLFSSL_LIBRARY_FOUND}")
+                            message(STATUS "  ✓ wolfSSL头文件目录: ${WOLFSSL_INCLUDE_DIR_FOUND}")
+                            message(STATUS "  ✓ TLS支持已启用")
+                        else()
+                            message(WARNING "  ⚠ 找到 wolfSSL 库但未找到头文件，TLS 功能将不可用")
+                        endif()
                     else()
-                        message(WARNING "wolfSSL库未找到，TLS功能可能不可用")
+                        message(WARNING "  ⚠ 未找到 wolfSSL 库，TLS 功能将不可用")
                     endif()
                 endif()
             endif()
@@ -623,12 +689,13 @@ message(STATUS "其他依赖（CMake/header-only）: FetchContent")
 if(ENABLE_JSON)
     message(STATUS "  ✓ nlohmann/json: FetchContent")
 endif()
+if(ENABLE_YAML)
+    message(STATUS "  ✓ yaml-cpp: FetchContent")
+endif()
 if(ENABLE_TESTING)
     message(STATUS "  ✓ Google Test: FetchContent")
 endif()
-if(ENABLE_FMT)
-    message(STATUS "  ✓ fmt: FetchContent")
-endif()
+message(STATUS "  ✓ fmt: FetchContent")
 message(STATUS "==========================================")
 message(STATUS "")
 

@@ -61,6 +61,7 @@ enum class MqttErrorCode {
     FILE_ERROR = 5002,
     THREAD_ERROR = 5003,
     QUEUE_FULL = 5004,
+    PERSISTENCE_ERROR = 5005,
     
     // 配置错误 (6000-6999)
     CONFIG_ERROR = 6000,
@@ -97,7 +98,7 @@ struct MqttError {
     /**
      * @brief 转换为字符串
      */
-    std::string toString() const {
+    [[nodiscard]] std::string toString() const {
         std::string result = "[" + std::to_string(static_cast<int>(code)) + "] " + message;
         if (!details.empty()) {
             result += " (" + details + ")";
@@ -108,68 +109,74 @@ struct MqttError {
     /**
      * @brief 检查是否成功
      */
-    bool isSuccess() const {
+    [[nodiscard]] bool isSuccess() const {
         return code == MqttErrorCode::SUCCESS;
     }
     
     /**
      * @brief 检查是否失败
      */
-    bool isFailure() const {
+    [[nodiscard]] bool isFailure() const {
         return !isSuccess();
     }
 };
 
 /**
+ * @brief 错误码描述表
+ * 
+ * 使用 C++17 inline 变量，确保在多个翻译单元中只有一个定义。
+ */
+inline const std::map<MqttErrorCode, std::string> kErrorDescriptions = {
+    {MqttErrorCode::SUCCESS, "成功"},
+    {MqttErrorCode::UNKNOWN_ERROR, "未知错误"},
+    {MqttErrorCode::INVALID_ARGUMENT, "无效参数"},
+    {MqttErrorCode::INVALID_STATE, "无效状态"},
+    {MqttErrorCode::NOT_INITIALIZED, "未初始化"},
+    {MqttErrorCode::NOT_CONNECTED, "未连接"},
+    {MqttErrorCode::INITIALIZATION_ERROR, "初始化错误"},
+    {MqttErrorCode::NETWORK_ERROR, "网络错误"},
+    {MqttErrorCode::CONNECTION_REFUSED, "连接被拒绝"},
+    {MqttErrorCode::CONNECTION_TIMEOUT, "连接超时"},
+    {MqttErrorCode::NETWORK_UNREACHABLE, "网络不可达"},
+    {MqttErrorCode::HOST_NOT_FOUND, "主机未找到"},
+    {MqttErrorCode::SOCKET_ERROR, "Socket错误"},
+    {MqttErrorCode::PROTOCOL_ERROR, "协议错误"},
+    {MqttErrorCode::INVALID_PACKET, "无效数据包"},
+    {MqttErrorCode::UNSUPPORTED_VERSION, "不支持的版本"},
+    {MqttErrorCode::IDENTIFIER_REJECTED, "标识符被拒绝"},
+    {MqttErrorCode::SERVER_UNAVAILABLE, "服务器不可用"},
+    {MqttErrorCode::BAD_USERNAME_OR_PASSWORD, "用户名或密码错误"},
+    {MqttErrorCode::NOT_AUTHORIZED, "未授权"},
+    {MqttErrorCode::PUBLISH_FAILED, "发布失败"},
+    {MqttErrorCode::SUBSCRIBE_FAILED, "订阅失败"},
+    {MqttErrorCode::UNSUBSCRIBE_FAILED, "取消订阅失败"},
+    {MqttErrorCode::TLS_ERROR, "TLS错误"},
+    {MqttErrorCode::CERTIFICATE_ERROR, "证书错误"},
+    {MqttErrorCode::CERTIFICATE_EXPIRED, "证书过期"},
+    {MqttErrorCode::CERTIFICATE_INVALID, "证书无效"},
+    {MqttErrorCode::TLS_HANDSHAKE_FAILED, "TLS握手失败"},
+    {MqttErrorCode::RESOURCE_ERROR, "资源错误"},
+    {MqttErrorCode::OUT_OF_MEMORY, "内存不足"},
+    {MqttErrorCode::FILE_ERROR, "文件错误"},
+    {MqttErrorCode::THREAD_ERROR, "线程错误"},
+    {MqttErrorCode::QUEUE_FULL, "队列已满"},
+    {MqttErrorCode::PERSISTENCE_ERROR, "持久化错误"},
+    {MqttErrorCode::CONFIG_ERROR, "配置错误"},
+    {MqttErrorCode::INVALID_CONFIG, "无效配置"},
+    {MqttErrorCode::CONFIG_NOT_FOUND, "配置未找到"},
+    {MqttErrorCode::CONFIG_VALIDATION_FAILED, "配置验证失败"},
+    {MqttErrorCode::MESSAGE_ERROR, "消息错误"},
+    {MqttErrorCode::MESSAGE_TOO_LARGE, "消息过大"},
+    {MqttErrorCode::INVALID_TOPIC, "无效主题"},
+    {MqttErrorCode::INVALID_PAYLOAD, "无效负载"}
+};
+
+/**
  * @brief 获取错误码描述
  */
-inline std::string getErrorCodeDescription(MqttErrorCode code) {
-    static const std::map<MqttErrorCode, std::string> descriptions = {
-        {MqttErrorCode::SUCCESS, "成功"},
-        {MqttErrorCode::UNKNOWN_ERROR, "未知错误"},
-        {MqttErrorCode::INVALID_ARGUMENT, "无效参数"},
-        {MqttErrorCode::INVALID_STATE, "无效状态"},
-        {MqttErrorCode::NOT_INITIALIZED, "未初始化"},
-        {MqttErrorCode::NOT_CONNECTED, "未连接"},
-        {MqttErrorCode::INITIALIZATION_ERROR, "初始化错误"},
-        {MqttErrorCode::NETWORK_ERROR, "网络错误"},
-        {MqttErrorCode::CONNECTION_REFUSED, "连接被拒绝"},
-        {MqttErrorCode::CONNECTION_TIMEOUT, "连接超时"},
-        {MqttErrorCode::NETWORK_UNREACHABLE, "网络不可达"},
-        {MqttErrorCode::HOST_NOT_FOUND, "主机未找到"},
-        {MqttErrorCode::SOCKET_ERROR, "Socket错误"},
-        {MqttErrorCode::PROTOCOL_ERROR, "协议错误"},
-        {MqttErrorCode::INVALID_PACKET, "无效数据包"},
-        {MqttErrorCode::UNSUPPORTED_VERSION, "不支持的版本"},
-        {MqttErrorCode::IDENTIFIER_REJECTED, "标识符被拒绝"},
-        {MqttErrorCode::SERVER_UNAVAILABLE, "服务器不可用"},
-        {MqttErrorCode::BAD_USERNAME_OR_PASSWORD, "用户名或密码错误"},
-        {MqttErrorCode::NOT_AUTHORIZED, "未授权"},
-        {MqttErrorCode::PUBLISH_FAILED, "发布失败"},
-        {MqttErrorCode::SUBSCRIBE_FAILED, "订阅失败"},
-        {MqttErrorCode::UNSUBSCRIBE_FAILED, "取消订阅失败"},
-        {MqttErrorCode::TLS_ERROR, "TLS错误"},
-        {MqttErrorCode::CERTIFICATE_ERROR, "证书错误"},
-        {MqttErrorCode::CERTIFICATE_EXPIRED, "证书过期"},
-        {MqttErrorCode::CERTIFICATE_INVALID, "证书无效"},
-        {MqttErrorCode::TLS_HANDSHAKE_FAILED, "TLS握手失败"},
-        {MqttErrorCode::RESOURCE_ERROR, "资源错误"},
-        {MqttErrorCode::OUT_OF_MEMORY, "内存不足"},
-        {MqttErrorCode::FILE_ERROR, "文件错误"},
-        {MqttErrorCode::THREAD_ERROR, "线程错误"},
-        {MqttErrorCode::QUEUE_FULL, "队列已满"},
-        {MqttErrorCode::CONFIG_ERROR, "配置错误"},
-        {MqttErrorCode::INVALID_CONFIG, "无效配置"},
-        {MqttErrorCode::CONFIG_NOT_FOUND, "配置未找到"},
-        {MqttErrorCode::CONFIG_VALIDATION_FAILED, "配置验证失败"},
-        {MqttErrorCode::MESSAGE_ERROR, "消息错误"},
-        {MqttErrorCode::MESSAGE_TOO_LARGE, "消息过大"},
-        {MqttErrorCode::INVALID_TOPIC, "无效主题"},
-        {MqttErrorCode::INVALID_PAYLOAD, "无效负载"}
-    };
-    
-    auto it = descriptions.find(code);
-    if (it != descriptions.end()) {
+[[nodiscard]] inline std::string getErrorCodeDescription(MqttErrorCode code) {
+    auto it = kErrorDescriptions.find(code);
+    if (it != kErrorDescriptions.end()) {
         return it->second;
     }
     return "未知错误码";

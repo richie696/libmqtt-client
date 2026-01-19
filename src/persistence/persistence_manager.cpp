@@ -10,52 +10,21 @@
 #include <nlohmann/json.hpp>
 #include <fstream>
 #include <sstream>
-#include <iomanip>
-#include <ctime>
 namespace mqtt_client {
 
 using json = nlohmann::json;
-
-// 使用宏定义日志接口
-#define LOG_ERROR(msg) \
-    do { \
-        if (LoggerManager::getInstance().getLogger()) { \
-            LoggerManager::getInstance().getLogger()->log(LogLevel::ERROR, msg, __FILE__, __LINE__); \
-        } \
-    } while(0)
-
-#define LOG_WARN(msg) \
-    do { \
-        if (LoggerManager::getInstance().getLogger()) { \
-            LoggerManager::getInstance().getLogger()->log(LogLevel::WARN, msg, __FILE__, __LINE__); \
-        } \
-    } while(0)
-
-#define LOG_INFO(msg) \
-    do { \
-        if (LoggerManager::getInstance().getLogger()) { \
-            LoggerManager::getInstance().getLogger()->log(LogLevel::INFO, msg, __FILE__, __LINE__); \
-        } \
-    } while(0)
-
-#define LOG_DEBUG(msg) \
-    do { \
-        if (LoggerManager::getInstance().getLogger()) { \
-            LoggerManager::getInstance().getLogger()->log(LogLevel::DEBUG, msg, __FILE__, __LINE__); \
-        } \
-    } while(0)
 
 // Base64编码/解码辅助函数
 namespace {
     std::string base64_encode(const std::string& data) {
         // 简单的base64编码实现（可以使用库函数）
         // 这里使用标准库的base64编码
-        static const char base64_chars[] = 
+        static constexpr char base64_chars[] =
             "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/";
         
         std::string encoded;
         int val = 0, valb = -6;
-        for (unsigned char c : data) {
+        for (const unsigned char c : data) {
             val = (val << 8) + c;
             valb += 8;
             while (valb >= 0) {
@@ -74,19 +43,20 @@ namespace {
     
     std::string base64_decode(const std::string& data) {
         // 简单的base64解码实现
-        static const char base64_chars[] = 
+        static constexpr char base64_chars[] =
             "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/";
         
         std::string decoded;
         int val = 0, valb = -8;
-        for (char c : data) {
+        for (const char c : data) {
             if (c == '=') break;
             const char* pos = strchr(base64_chars, c);
             if (pos == nullptr) continue;
-            val = (val << 6) + (pos - base64_chars);
+            // base64 字符表只有64个字符，索引范围 0-63，可以安全转换为 int
+            val = (val << 6) + static_cast<int>(pos - base64_chars);
             valb += 6;
             if (valb >= 0) {
-                decoded.push_back(char((val >> valb) & 0xFF));
+                decoded.push_back(static_cast<char>(val >> valb & 0xFF));
                 valb -= 8;
             }
         }
@@ -96,7 +66,7 @@ namespace {
 
 PersistenceManager::PersistenceManager(
     const std::string& storagePath,
-    std::shared_ptr<StorageEngine> storageEngine)
+    const std::shared_ptr<StorageEngine> &storageEngine)
     : storagePath_(storagePath)
     , storageEngine_(storageEngine ? storageEngine : std::make_shared<FileStorageEngine>(storagePath)) {
 }
@@ -520,23 +490,23 @@ bool PersistenceManager::hasRecoveryData() const {
            storageEngine_->exists(getIdempotencyRecordsPath());
 }
 
-std::string PersistenceManager::getSendQueuePath() const {
+std::string PersistenceManager::getSendQueuePath() {
     return "send_queue.json";
 }
 
-std::string PersistenceManager::getReceiveQueuePath() const {
+std::string PersistenceManager::getReceiveQueuePath() {
     return "receive_queue.json";
 }
 
-std::string PersistenceManager::getSubscriptionsPath() const {
+std::string PersistenceManager::getSubscriptionsPath() {
     return "subscriptions.json";
 }
 
-std::string PersistenceManager::getClientStatePath() const {
+std::string PersistenceManager::getClientStatePath() {
     return "client_state.json";
 }
 
-std::string PersistenceManager::getIdempotencyRecordsPath() const {
+std::string PersistenceManager::getIdempotencyRecordsPath() {
     return "idempotency_records.json";
 }
 

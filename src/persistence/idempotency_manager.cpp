@@ -13,73 +13,36 @@
 #include <chrono>
 #include <thread>
 
-// 使用 wolfSSL 的 OpenSSL 兼容接口
-#ifdef ENABLE_MQTT_TLS
-    #include <wolfssl/openssl/sha.h>
-    #include <wolfssl/openssl/opensslv.h>
-#else
-    // 如果没有 wolfSSL，使用标准库的简单实现（仅用于测试）
-    // 注意：生产环境应该使用 wolfSSL 或 OpenSSL
-    #include <functional>
-    #include <cstring>
-    
-    // 简单的 SHA-256 实现（仅用于测试，生产环境应使用 wolfSSL）
-    namespace {
-        // 简单的 SHA-256 实现（仅用于测试）
-        // 生产环境应该使用 wolfSSL 或 OpenSSL
-        void simple_sha256(const unsigned char* data, size_t len, unsigned char* hash) {
-            // 这是一个占位实现，实际应该使用 wolfSSL 或 OpenSSL
-            // 为了编译通过，使用简单的 hash
-            std::hash<std::string> hasher;
-            size_t hash_value = hasher(std::string(reinterpret_cast<const char*>(data), len));
-            std::memcpy(hash, &hash_value, std::min(sizeof(hash_value), size_t(32)));
-            // 填充剩余部分
-            if (sizeof(hash_value) < 32) {
-                std::memset(hash + sizeof(hash_value), 0, 32 - sizeof(hash_value));
-            }
+using namespace std::chrono_literals;
+
+// 使用标准库的简单 SHA-256 实现
+// 注意：这是简化实现，仅用于测试。生产环境建议使用专业的加密库（如 OpenSSL）
+#include <functional>
+
+namespace {
+    // 简单的 SHA-256 实现（仅用于测试）
+    // 生产环境应该使用专业的加密库（如 OpenSSL）
+    void simple_sha256(const unsigned char* data, size_t len, unsigned char* hash) {
+        // 使用 std::hash 作为占位实现
+        constexpr std::hash<std::string> hasher;
+        const size_t hash_value = hasher(std::string(reinterpret_cast<const char*>(data), len));
+        std::memcpy(hash, &hash_value, std::min(sizeof(hash_value), size_t(32)));
+        // 填充剩余部分
+        if (sizeof(hash_value) < 32) {
+            std::memset(hash + sizeof(hash_value), 0, 32 - sizeof(hash_value));
         }
     }
-#endif
+}
 
 namespace mqtt_client {
 
-// 使用宏定义日志接口
-#define LOG_ERROR(msg) \
-    do { \
-        if (LoggerManager::getInstance().getLogger()) { \
-            LoggerManager::getInstance().getLogger()->log(LogLevel::ERROR, msg, __FILE__, __LINE__); \
-        } \
-    } while(0)
-
-#define LOG_WARN(msg) \
-    do { \
-        if (LoggerManager::getInstance().getLogger()) { \
-            LoggerManager::getInstance().getLogger()->log(LogLevel::WARN, msg, __FILE__, __LINE__); \
-        } \
-    } while(0)
-
-#define LOG_INFO(msg) \
-    do { \
-        if (LoggerManager::getInstance().getLogger()) { \
-            LoggerManager::getInstance().getLogger()->log(LogLevel::INFO, msg, __FILE__, __LINE__); \
-        } \
-    } while(0)
-
-#define LOG_DEBUG(msg) \
-    do { \
-        if (LoggerManager::getInstance().getLogger()) { \
-            LoggerManager::getInstance().getLogger()->log(LogLevel::DEBUG, msg, __FILE__, __LINE__); \
-        } \
-    } while(0)
-
 IdempotencyManager::IdempotencyManager(
-    std::shared_ptr<PersistenceManager> persistenceManager,
-    time_t retentionTime,
-    time_t cleanupInterval)
+    const std::shared_ptr<PersistenceManager> &persistenceManager,
+    const time_t retentionTime,
+    const time_t cleanupInterval)
     : persistenceManager_(persistenceManager)
     , retentionTime_(retentionTime)
-    , cleanupInterval_(cleanupInterval)
-    , running_(false) {
+    , cleanupInterval_(cleanupInterval) {
     
     if (!persistenceManager_) {
         LOG_WARN("持久化管理器为空，幂等去重功能可能受限");
@@ -90,7 +53,8 @@ IdempotencyManager::IdempotencyManager(
     cleanupThread_ = std::thread(&IdempotencyManager::cleanupThread, this);
     
     // 从持久化恢复
-    recover();
+    const auto result = recover();
+    LOG_INFO("恢复幂等去重结果: " + std::to_string(result.success));
 }
 
 IdempotencyManager::~IdempotencyManager() {
@@ -101,20 +65,20 @@ IdempotencyManager::~IdempotencyManager() {
     }
     
     // 持久化去重数据
-    persist();
+    const auto result = persist();
+    LOG_INFO("持久化幂等去重结果：" + std::to_string(result.success));
 }
 
 bool IdempotencyManager::isDuplicate(const std::string& messageHash) {
-    std::lock_guard<std::mutex> lock(mutex_);
-    
-    auto it = duplicateRecords_.find(messageHash);
+    std::lock_guard lock(mutex_);
+
+    const auto it = duplicateRecords_.find(messageHash);
     if (it == duplicateRecords_.end()) {
         return false;  // 新消息
     }
     
     // 检查是否过期
-    time_t now = std::time(nullptr);
-    if (now - it->second > retentionTime_) {
+    if (const time_t now = std::time(nullptr); now - it->second > retentionTime_) {
         // 已过期，删除记录
         duplicateRecords_.erase(it);
         return false;  // 视为新消息
@@ -124,9 +88,9 @@ bool IdempotencyManager::isDuplicate(const std::string& messageHash) {
 }
 
 Result<bool> IdempotencyManager::markProcessed(const std::string& messageHash) {
-    std::lock_guard<std::mutex> lock(mutex_);
-    
-    time_t now = std::time(nullptr);
+    std::lock_guard lock(mutex_);
+
+    const time_t now = std::time(nullptr);
     duplicateRecords_[messageHash] = now;
     
     LOG_DEBUG("标记消息已处理: " + messageHash);
@@ -143,46 +107,38 @@ std::string IdempotencyManager::calculateMessageHash(const std::string& topic,
     // 组合消息特征
     std::string combined = topic + "|" + payload + "|" + std::to_string(static_cast<int>(qos));
     
-#ifdef ENABLE_MQTT_TLS
-    // 使用 wolfSSL 的 SHA-256
-    unsigned char hash[SHA256_DIGEST_LENGTH];
-    SHA256_CTX sha256;
-    SHA256_Init(&sha256);
-    SHA256_Update(&sha256, combined.c_str(), combined.length());
-    SHA256_Final(hash, &sha256);
-#else
-    // 使用简单的 hash（仅用于测试）
+    // 使用简单的 hash 实现（仅用于测试）
+    // 注意：生产环境建议使用专业的加密库（如 OpenSSL）进行 SHA-256 计算
     unsigned char hash[32];
     simple_sha256(reinterpret_cast<const unsigned char*>(combined.c_str()), 
                   combined.length(), hash);
-#endif
     
     // 转换为十六进制字符串
     std::stringstream ss;
-    for (int i = 0; i < 32; i++) {
-        ss << std::hex << std::setw(2) << std::setfill('0') << static_cast<int>(hash[i]);
+    for (const unsigned char i : hash) {
+        ss << std::hex << std::setw(2) << std::setfill('0') << static_cast<int>(i);
     }
     
     return ss.str();
 }
 
 size_t IdempotencyManager::getDuplicateCount() const {
-    std::lock_guard<std::mutex> lock(mutex_);
+    std::lock_guard lock(mutex_);
     return duplicateRecords_.size();
 }
 
 void IdempotencyManager::setRetentionTime(time_t retentionTime) {
-    std::lock_guard<std::mutex> lock(mutex_);
+    std::lock_guard lock(mutex_);
     retentionTime_ = retentionTime;
 }
 
 time_t IdempotencyManager::getRetentionTime() const {
-    std::lock_guard<std::mutex> lock(mutex_);
+    std::lock_guard lock(mutex_);
     return retentionTime_;
 }
 
 Result<bool> IdempotencyManager::cleanup() {
-    std::lock_guard<std::mutex> lock(mutex_);
+    std::lock_guard lock(mutex_);
     cleanupExpired();
     return Result<bool>::Success(true);
 }
@@ -194,7 +150,7 @@ Result<bool> IdempotencyManager::persist() {
                      "持久化管理器未初始化"));
     }
     
-    std::lock_guard<std::mutex> lock(mutex_);
+    std::lock_guard lock(mutex_);
     
     // 清理过期数据后再持久化
     cleanupExpired();
@@ -215,7 +171,7 @@ Result<bool> IdempotencyManager::recover() {
         return Result<bool>::Success(true);  // 恢复失败不影响启动
     }
     
-    std::lock_guard<std::mutex> lock(mutex_);
+    std::lock_guard lock(mutex_);
     
     // 清理过期数据
     time_t now = std::time(nullptr);
@@ -234,14 +190,14 @@ Result<bool> IdempotencyManager::recover() {
 }
 
 void IdempotencyManager::clear() {
-    std::lock_guard<std::mutex> lock(mutex_);
+    std::lock_guard lock(mutex_);
     duplicateRecords_.clear();
     LOG_INFO("清空所有幂等去重记录");
 }
 
 void IdempotencyManager::cleanupThread() {
     while (running_.load()) {
-        std::this_thread::sleep_for(std::chrono::seconds(cleanupInterval_));
+        std::this_thread::sleep_for(std::chrono::seconds{cleanupInterval_});
         
         if (!running_.load()) {
             break;
@@ -249,7 +205,7 @@ void IdempotencyManager::cleanupThread() {
         
         // 清理过期数据
         {
-            std::lock_guard<std::mutex> lock(mutex_);
+            std::lock_guard lock(mutex_);
             cleanupExpired();
         }
         

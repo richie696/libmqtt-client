@@ -54,21 +54,21 @@ public:
      * 
      * @return Result<bool> 连接结果
      */
-    Result<bool> connect();
+    [[nodiscard]] Result<bool> connect();
     
     /**
      * @brief 断开连接
      * 
      * @return Result<bool> 断开结果
      */
-    Result<bool> disconnect();
+    [[nodiscard]] Result<bool> disconnect();
     
     /**
      * @brief 重新连接
      * 
      * @return Result<bool> 重连结果
      */
-    Result<bool> reconnect();
+    [[nodiscard]] Result<bool> reconnect();
     
     /**
      * @brief 检查是否已连接
@@ -76,28 +76,28 @@ public:
      * @return true 已连接
      * @return false 未连接
      */
-    bool isConnected() const;
+    [[nodiscard]] bool isConnected() const;
     
     /**
      * @brief 获取连接状态
      * 
      * @return ConnectionState 连接状态
      */
-    ConnectionState getState() const;
+    [[nodiscard]] ConnectionState getState() const;
     
     /**
      * @brief 获取上次连接时间
      * 
      * @return time_t 上次连接时间（Unix时间戳）
      */
-    time_t getLastConnectTime() const;
+    [[nodiscard]] time_t getLastConnectTime() const;
     
     /**
      * @brief 获取重连次数
      * 
      * @return int 重连次数
      */
-    int getReconnectCount() const;
+    [[nodiscard]] int getReconnectCount() const;
     
     /**
      * @brief 重置重连计数
@@ -109,21 +109,21 @@ public:
      * 
      * @param callback 回调函数
      */
-    void setOnConnected(std::function<void()> callback);
+    void setOnConnected(const std::function<void()> &callback);
     
     /**
      * @brief 设置连接丢失回调
      * 
      * @param callback 回调函数，参数为丢失原因
      */
-    void setOnConnectionLost(std::function<void(const std::string&)> callback);
+    void setOnConnectionLost(const std::function<void(const std::string&)> &callback);
     
     /**
      * @brief 设置连接失败回调
      * 
      * @param callback 回调函数，参数为失败原因
      */
-    void setOnConnectFailure(std::function<void(const std::string&)> callback);
+    void setOnConnectFailure(const std::function<void(const std::string&)> &callback);
     
     /**
      * @brief 获取wolfMQTT适配器

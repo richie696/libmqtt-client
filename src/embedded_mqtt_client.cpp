@@ -138,10 +138,9 @@ namespace {
         
         // ========== 运行时信息 ==========
         oss << "运行时信息:\n";
-        std::time_t now = std::time(nullptr);
-        std::tm* timeinfo = std::localtime(&now);
-        if (timeinfo) {
-            oss << "  当前时间: " << std::put_time(timeinfo, "%Y-%m-%d %H:%M:%S") << "\n";
+        const std::time_t now = std::time(nullptr);
+        if (const std::tm* timeInfo = std::localtime(&now)) {
+            oss << "  当前时间: " << std::put_time(timeInfo, "%Y-%m-%d %H:%M:%S") << "\n";
         }
         
         // ========== 内存信息（如果可用）==========
@@ -184,7 +183,7 @@ EmbeddedMqttClient::EmbeddedMqttClient(const MqttConfig& config)
     , connected_(false)
 {
     // 立即初始化
-    auto result = initialize(config);
+    const auto result = initialize(config);
     if (!result) {
         LOG_ERROR("初始化失败: " + result.error.message);
     }
@@ -195,7 +194,7 @@ EmbeddedMqttClient::~EmbeddedMqttClient() {
 }
 
 Result<bool> EmbeddedMqttClient::initialize(const MqttConfig& config) {
-    std::lock_guard<std::mutex> lock(mutex_);
+    std::lock_guard lock(mutex_);
     
     // 检查是否已初始化
     if (initialized_.load()) {
@@ -204,10 +203,9 @@ Result<bool> EmbeddedMqttClient::initialize(const MqttConfig& config) {
                      "客户端已初始化，请先调用cleanup()"));
     }
     
-    // 验证配置
-    auto& configManager = MqttConfigManager::getInstance();
-    auto validation = configManager.validate(config);
-    if (!validation) {
+    // 验证配置（使用 if 初始化语句，限制变量作用域）
+    if (const auto& configManager = MqttConfigManager::getInstance();
+        const auto validation = configManager.validate(config); !validation) {
         return Result<bool>::Failure(
             MqttError(MqttErrorCode::INVALID_CONFIG,
                      "配置验证失败: " + validation.error.message));
@@ -217,8 +215,7 @@ Result<bool> EmbeddedMqttClient::initialize(const MqttConfig& config) {
     config_ = config;
     
     // 初始化子组件
-    auto initResult = initializeComponents();
-    if (!initResult) {
+    if (auto initResult = initializeComponents(); !initResult) {
         cleanupComponents();
         return initResult;
     }
@@ -238,7 +235,7 @@ bool EmbeddedMqttClient::isInitialized() const noexcept {
 }
 
 void EmbeddedMqttClient::cleanup() {
-    std::lock_guard<std::mutex> lock(mutex_);
+    std::lock_guard lock(mutex_);
     
     if (!initialized_.load()) {
         return;
@@ -258,7 +255,7 @@ void EmbeddedMqttClient::cleanup() {
 }
 
 Result<bool> EmbeddedMqttClient::updateConfig(const MqttConfig& config) {
-    std::lock_guard<std::mutex> lock(mutex_);
+    std::lock_guard lock(mutex_);
     
     if (!initialized_.load()) {
         return Result<bool>::Failure(
@@ -267,9 +264,9 @@ Result<bool> EmbeddedMqttClient::updateConfig(const MqttConfig& config) {
     }
     
     // 验证配置
-    auto& configManager = MqttConfigManager::getInstance();
-    auto validation = configManager.validate(config);
-    if (!validation) {
+    // 使用 if 初始化语句，限制变量作用域
+    if (auto& configManager = MqttConfigManager::getInstance();
+        auto validation = configManager.validate(config); !validation) {
         return Result<bool>::Failure(
             MqttError(MqttErrorCode::INVALID_CONFIG,
                      "配置验证失败: " + validation.error.message));
@@ -290,12 +287,12 @@ Result<bool> EmbeddedMqttClient::updateConfig(const MqttConfig& config) {
 }
 
 const MqttConfig& EmbeddedMqttClient::getConfig() const noexcept {
-    std::lock_guard<std::mutex> lock(mutex_);
+    std::lock_guard lock(mutex_);
     return config_;
 }
 
 Result<bool> EmbeddedMqttClient::connect() {
-    std::lock_guard<std::mutex> lock(mutex_);
+    std::lock_guard lock(mutex_);
     
     if (!initialized_.load()) {
         return Result<bool>::Failure(
@@ -341,7 +338,7 @@ Result<bool> EmbeddedMqttClient::connect() {
 }
 
 Result<bool> EmbeddedMqttClient::disconnect(bool /* force */) {
-    std::lock_guard<std::mutex> lock(mutex_);
+    std::lock_guard lock(mutex_);
     
     if (!connected_.load()) {
         return Result<bool>::Success(true);
@@ -375,7 +372,7 @@ Result<bool> EmbeddedMqttClient::disconnect(bool /* force */) {
 }
 
 Result<bool> EmbeddedMqttClient::reconnect() {
-    std::lock_guard<std::mutex> lock(mutex_);
+    std::lock_guard lock(mutex_);
     
     if (!initialized_.load()) {
         return Result<bool>::Failure(
@@ -410,11 +407,11 @@ NetworkQuality EmbeddedMqttClient::getNetworkQuality() const {
     return NetworkQuality::FAIR;
 }
 
-Result<bool> EmbeddedMqttClient::publish(const std::string& topic,
-                                        const std::string& payload,
+Result<bool> EmbeddedMqttClient::publish(std::string_view topic,
+                                        std::string_view payload,
                                         QoS qos,
                                         bool retain) {
-    std::lock_guard<std::mutex> lock(mutex_);
+    std::lock_guard lock(mutex_);
     
     if (!initialized_.load()) {
         return Result<bool>::Failure(
@@ -428,15 +425,15 @@ Result<bool> EmbeddedMqttClient::publish(const std::string& topic,
                      "消息管理器未初始化"));
     }
     
-    return messageManager_->publish(topic, payload, qos, retain);
+    return messageManager_->publish(std::string(topic), std::string(payload), qos, retain);
 }
 
-Result<bool> EmbeddedMqttClient::publish(const std::string& topic,
-                                        const std::string& payload,
+Result<bool> EmbeddedMqttClient::publish(std::string_view topic,
+                                        std::string_view payload,
                                         const MqttProperties& properties,
                                         QoS qos,
                                         bool retain) {
-    std::lock_guard<std::mutex> lock(mutex_);
+    std::lock_guard lock(mutex_);
     
     if (!initialized_.load()) {
         return Result<bool>::Failure(
@@ -458,12 +455,12 @@ Result<bool> EmbeddedMqttClient::publish(const std::string& topic,
     if (config_.basic.version != "5.0") {
         // MQTT 3.1.1 不支持属性，忽略 properties 参数
         LOG_DEBUG("MQTT 3.1.1 不支持属性，忽略 properties 参数");
-        return messageManager_->publish(topic, payload, qos, retain);
+        return messageManager_->publish(std::string(topic), std::string(payload), qos, retain);
     }
     
     // MQTT 5.0：如果属性为空，使用普通发布方法（通过 MessageManager）
     if (properties.isEmpty()) {
-        return messageManager_->publish(topic, payload, qos, retain);
+        return messageManager_->publish(std::string(topic), std::string(payload), qos, retain);
     }
     
     // MQTT 5.0：有属性时，直接通过 adapter 发布（绕过 MessageManager）
@@ -486,10 +483,10 @@ Result<bool> EmbeddedMqttClient::publish(const std::string& topic,
     return wolfAdapter_->publish(topic, payload, properties, qos, retain);
 }
 
-Result<bool> EmbeddedMqttClient::subscribe(const std::string& topic,
+Result<bool> EmbeddedMqttClient::subscribe(std::string_view topic,
                                           MessageCallback callback,
                                           QoS qos) {
-    std::lock_guard<std::mutex> lock(mutex_);
+    std::lock_guard lock(mutex_);
     
     if (!initialized_.load()) {
         return Result<bool>::Failure(
@@ -506,8 +503,8 @@ Result<bool> EmbeddedMqttClient::subscribe(const std::string& topic,
     return subscriptionManager_->subscribe(topic, callback, qos);
 }
 
-Result<bool> EmbeddedMqttClient::unsubscribe(const std::string& topic) {
-    std::lock_guard<std::mutex> lock(mutex_);
+Result<bool> EmbeddedMqttClient::unsubscribe(std::string_view topic) const {
+    std::lock_guard lock(mutex_);
     
     if (!initialized_.load()) {
         return Result<bool>::Failure(
@@ -525,29 +522,29 @@ Result<bool> EmbeddedMqttClient::unsubscribe(const std::string& topic) {
 }
 
 std::vector<std::string> EmbeddedMqttClient::getSubscribedTopics() const {
-    std::lock_guard<std::mutex> lock(mutex_);
+    std::lock_guard lock(mutex_);
     
     if (!subscriptionManager_) {
-        return std::vector<std::string>();
+        return {};
     }
     
     return subscriptionManager_->getSubscribedTopics();
 }
 
-void EmbeddedMqttClient::setConnectionCallback(ConnectionCallback callback) {
-    std::lock_guard<std::mutex> lock(mutex_);
+void EmbeddedMqttClient::setConnectionCallback(const ConnectionCallback &callback) {
+    std::lock_guard lock(mutex_);
     connectionCallback_ = callback;
 }
 
-void EmbeddedMqttClient::setErrorCallback(ErrorCallback callback) {
-    std::lock_guard<std::mutex> lock(mutex_);
+void EmbeddedMqttClient::setErrorCallback(const ErrorCallback &callback) {
+    std::lock_guard lock(mutex_);
     errorCallback_ = callback;
 }
 
 Result<bool> EmbeddedMqttClient::initializeComponents() {
     // 1. 创建wolfMQTT适配器
     wolfAdapter_ = std::make_unique<WolfMqttAdapter>(config_);
-    auto adapterInit = wolfAdapter_->initialize();
+    const auto adapterInit = wolfAdapter_->initialize();
     if (!adapterInit) {
         return Result<bool>::Failure(
             MqttError(MqttErrorCode::INITIALIZATION_ERROR,
@@ -593,7 +590,7 @@ Result<bool> EmbeddedMqttClient::initializeComponents() {
     reconnectManager_ = std::make_unique<ReconnectManager>(config_.reconnect);
     
     // 9. 创建持久化管理器（如果启用持久化）
-    if (config_.persistence.storage.storagePath != "") {
+    if (!config_.persistence.storage.storagePath.empty()) {
         persistenceManager_ = std::make_shared<PersistenceManager>(
             config_.persistence.storage.storagePath
         );
@@ -704,17 +701,17 @@ void EmbeddedMqttClient::setupCallbacks() {
     if (wolfAdapter_ && subscriptionManager_) {
         wolfAdapter_->setMessageCallback([this](const std::string& topic,
                                                 const std::string& payload,
-                                                QoS qos) {
+                                                [[maybe_unused]] QoS qos) {
             if (subscriptionManager_) {
                 // 如果启用了幂等去重，先检查是否重复
                 if (idempotencyManager_ && config_.persistence.idempotency.enableIdempotency) {
                     // 计算消息hash
                     std::string messageHash = IdempotencyManager::calculateMessageHash(
-                        topic, payload, qos);
+                        std::string(topic), std::string(payload), qos);
                     
                     // 检查是否重复
                     if (idempotencyManager_->isDuplicate(messageHash)) {
-                        LOG_WARN("收到重复消息，已忽略: topic=" + topic + 
+                        LOG_WARN("收到重复消息，已忽略: topic=" + std::string(topic) + 
                                 ", hash=" + messageHash);
                         return;  // 忽略重复消息
                     }
@@ -725,7 +722,6 @@ void EmbeddedMqttClient::setupCallbacks() {
                 
                 // 分发消息
                 MqttProperties properties;  // 简化实现，暂时为空
-                (void)qos;  // 避免未使用参数警告
                 subscriptionManager_->dispatchMessage(topic, payload, properties);
             }
         });

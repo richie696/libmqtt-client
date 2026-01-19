@@ -105,11 +105,11 @@ public:
      * @param priority 优先级（0-9，9最高，默认5）
      * @return Result<bool> 发布结果
      */
-    Result<bool> publish(const std::string& topic,
-                         const std::string& payload,
-                         QoS qos = QoS::QOS_0,
-                         bool retained = false,
-                         int priority = 5);
+    [[nodiscard]] Result<bool> publish(const std::string& topic,
+                                       const std::string& payload,
+                                       QoS qos = QoS::QOS_0,
+                                       bool retained = false,
+                                       int priority = 5);
     
     /**
      * @brief 发布消息（同步，带超时）
@@ -121,11 +121,11 @@ public:
      * @param timeoutMs 超时时间（毫秒）
      * @return Result<bool> 发布结果
      */
-    Result<bool> publishSync(const std::string& topic,
-                            const std::string& payload,
-                            QoS qos = QoS::QOS_0,
-                            bool retained = false,
-                            int timeoutMs = 5000);
+    [[nodiscard]] Result<bool> publishSync(const std::string& topic,
+                                           const std::string& payload,
+                                           QoS qos = QoS::QOS_0,
+                                           bool retained = false,
+                                           [[maybe_unused]] int timeoutMs = 5000);
     
     /**
      * @brief 将消息加入队列（用于离线时缓存）
@@ -137,11 +137,11 @@ public:
      * @param priority 优先级
      * @return Result<bool> 入队结果
      */
-    Result<bool> queueMessage(const std::string& topic,
-                              const std::string& payload,
-                              QoS qos = QoS::QOS_0,
-                              bool retained = false,
-                              int priority = 5);
+    [[nodiscard]] Result<bool> queueMessage(const std::string& topic,
+                                            const std::string& payload,
+                                            QoS qos = QoS::QOS_0,
+                                            bool retained = false,
+                                            int priority = 5);
     
     /**
      * @brief 获取队列大小
@@ -178,7 +178,7 @@ public:
      * 
      * @return MessageStats 统计信息
      */
-    MessageStats getStats() const;
+    [[nodiscard]] MessageStats getStats() const;
     
     /**
      * @brief 重置统计信息
@@ -192,7 +192,7 @@ private:
      * @param msg 消息对象
      * @return Result<bool> 发送结果
      */
-    Result<bool> sendMessage(const QueuedMessage& msg);
+    [[nodiscard]] Result<bool> sendMessage(const QueuedMessage& msg);
     
     /**
      * @brief 处理批量消息

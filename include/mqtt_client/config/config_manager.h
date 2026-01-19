@@ -41,7 +41,7 @@ public:
      * @param filePath 配置文件路径
      * @return Result<MqttConfig> 加载结果
      */
-    Result<MqttConfig> loadFromFile(const std::string& filePath);
+    [[nodiscard]] Result<MqttConfig> loadFromFile(const std::string& filePath);
     
     /**
      * @brief 从JSON字符串加载配置
@@ -49,7 +49,7 @@ public:
      * @param json JSON字符串
      * @return Result<MqttConfig> 加载结果
      */
-    Result<MqttConfig> loadFromJson(const std::string& json);
+    [[nodiscard]] Result<MqttConfig> loadFromJson(const std::string& json);
     
     /**
      * @brief 从YAML文件加载配置
@@ -57,14 +57,14 @@ public:
      * @param filePath YAML文件路径
      * @return Result<MqttConfig> 加载结果
      */
-    Result<MqttConfig> loadFromYaml(const std::string& filePath);
+    [[nodiscard]] static Result<MqttConfig> loadFromYaml(const std::string& filePath);
     
     /**
      * @brief 使用默认配置
      * 
      * @return MqttConfig 默认配置
      */
-    MqttConfig getDefaultConfig() const;
+    static MqttConfig getDefaultConfig();
     
     /**
      * @brief 验证配置
@@ -72,7 +72,7 @@ public:
      * @param config 待验证的配置
      * @return Result<bool> 验证结果，true表示有效
      */
-    Result<bool> validate(const MqttConfig& config) const;
+    [[nodiscard]] static Result<bool> validate(const MqttConfig& config);
     
     /**
      * @brief 获取验证错误列表
@@ -80,7 +80,7 @@ public:
      * @param config 待验证的配置
      * @return std::vector<std::string> 错误列表（空表示无错误）
      */
-    std::vector<std::string> getValidationErrors(const MqttConfig& config) const;
+    static std::vector<std::string> getValidationErrors(const MqttConfig& config);
     
     /**
      * @brief 保存配置到文件
@@ -89,7 +89,7 @@ public:
      * @param filePath 文件路径
      * @return Result<bool> 保存结果
      */
-    Result<bool> saveToFile(const MqttConfig& config, const std::string& filePath);
+    [[nodiscard]] Result<bool> saveToFile(const MqttConfig& config, const std::string& filePath);
     
     /**
      * @brief 保存配置到JSON字符串
@@ -97,7 +97,7 @@ public:
      * @param config 配置对象
      * @return Result<std::string> JSON字符串
      */
-    Result<std::string> saveToJson(const MqttConfig& config) const;
+    [[nodiscard]] static Result<std::string> saveToJson(const MqttConfig& config);
     
     /**
      * @brief 合并配置（用新配置覆盖旧配置）
@@ -108,7 +108,7 @@ public:
      * @param override 覆盖配置
      * @return MqttConfig 合并后的配置
      */
-    MqttConfig merge(const MqttConfig& base, const MqttConfig& override) const;
+    static MqttConfig merge(const MqttConfig& base, const MqttConfig& override);
     
     /**
      * @brief 热更新配置（部分配置支持运行时更新）
@@ -118,7 +118,7 @@ public:
      * @param newConfig 新配置
      * @return Result<bool> 更新结果
      */
-    Result<bool> hotUpdate(const MqttConfig& newConfig);
+    [[nodiscard]] Result<bool> hotUpdate(const MqttConfig& newConfig);
     
     /**
      * @brief 注册配置更新回调
@@ -127,7 +127,7 @@ public:
      * 
      * @param callback 回调函数
      */
-    void registerUpdateCallback(std::function<void(const MqttConfig&)> callback);
+    void registerUpdateCallback(const std::function<void(const MqttConfig&)>& callback);
     
     /**
      * @brief 获取当前配置
@@ -163,7 +163,7 @@ public:
      * @param authToken 认证Token（可选）
      * @return Result<std::string> 配置JSON字符串
      */
-    static Result<std::string> fetchConfigFromServer(
+    [[nodiscard]] static Result<std::string> fetchConfigFromServer(
         const std::string& serverUrl,
         const std::string& deviceId,
         const std::string& authToken = "");
@@ -181,10 +181,10 @@ private:
      * @return Result<MqttConfig> 解析结果
      */
     // 内部方法：解析JSON对象（需要ENABLE_JSON，不加锁）
-    Result<MqttConfig> parseJsonConfigImpl(const std::string& jsonStr) const;
+    [[nodiscard]] static Result<MqttConfig> parseJsonConfigImpl(const std::string& jsonStr);
     
     // 内部方法：加载JSON配置（不加锁版本，供loadFromFile使用）
-    Result<MqttConfig> loadFromJsonImpl(const std::string& jsonStr);
+    [[nodiscard]] static Result<MqttConfig> loadFromJsonImpl(const std::string& jsonStr);
     
     /**
      * @brief 验证基础配置
@@ -194,8 +194,8 @@ private:
      * @return true 验证通过
      * @return false 验证失败
      */
-    bool validateBasicConfig(const MqttConfig::BasicConfig& config, 
-                            std::vector<std::string>& errors) const;
+    static bool validateBasicConfig(const MqttConfig::BasicConfig& config, 
+                                    std::vector<std::string>& errors);
     
     /**
      * @brief 验证服务器配置
@@ -205,8 +205,8 @@ private:
      * @return true 验证通过
      * @return false 验证失败
      */
-    bool validateServerConfig(const MqttConfig::ServerConfig& config,
-                             std::vector<std::string>& errors) const;
+    static bool validateServerConfig(const MqttConfig::ServerConfig& config,
+                                     std::vector<std::string>& errors);
     
     /**
      * @brief 验证安全配置
@@ -216,8 +216,8 @@ private:
      * @return true 验证通过
      * @return false 验证失败
      */
-    bool validateSecurityConfig(const MqttConfig::SecurityConfig& config,
-                               std::vector<std::string>& errors) const;
+    static bool validateSecurityConfig(const MqttConfig::SecurityConfig& config,
+                                       std::vector<std::string>& errors);
     
     /**
      * @brief 检测文件格式
@@ -225,7 +225,7 @@ private:
      * @param filePath 文件路径
      * @return std::string 格式名称（"json"或"yaml"）
      */
-    std::string detectFileFormat(const std::string& filePath) const;
+    static std::string detectFileFormat(const std::string& filePath);
     
     MqttConfig currentConfig_;  ///< 当前配置
     std::vector<std::function<void(const MqttConfig&)>> updateCallbacks_;  ///< 更新回调列表

@@ -10,6 +10,7 @@
 
 #include <cstdint>
 #include <string>
+#include <string_view>
 #include <chrono>
 #include <map>
 #include <optional>
@@ -87,15 +88,15 @@ struct MqttProperties {
     /**
      * @brief 设置用户属性
      */
-    void setUserProperty(const std::string& key, const std::string& value) {
-        userProperties[key] = value;
+    void setUserProperty(std::string_view key, std::string_view value) {
+        userProperties[std::string(key)] = std::string(value);
     }
     
     /**
      * @brief 获取用户属性
      */
-    std::optional<std::string> getUserProperty(const std::string& key) const {
-        auto it = userProperties.find(key);
+    [[nodiscard]] std::optional<std::string> getUserProperty(std::string_view key) const {
+        auto it = userProperties.find(std::string(key));
         if (it != userProperties.end()) {
             return it->second;
         }
@@ -105,7 +106,7 @@ struct MqttProperties {
     /**
      * @brief 检查是否为空
      */
-    bool isEmpty() const {
+    [[nodiscard]] bool isEmpty() const {
         return !messageExpiryInterval.has_value() &&
                !contentType.has_value() &&
                !responseTopic.has_value() &&
