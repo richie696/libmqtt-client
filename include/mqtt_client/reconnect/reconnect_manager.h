@@ -47,7 +47,7 @@ public:
      * @param connectFunc 连接函数，返回true表示连接成功
      * @return bool 是否成功启动重连
      */
-    [[nodiscard]] bool startReconnect(std::function<bool()> connectFunc);
+    [[nodiscard]] bool startReconnect(const std::function<bool()>& connectFunc);
     
     /**
      * @brief 停止重连
@@ -100,7 +100,7 @@ public:
      * 
      * @param callback 回调函数，参数为(尝试次数, 最大次数, 下次间隔)
      */
-    void setOnReconnectAttempt(std::function<void(int, int, long)> callback);
+    void setOnReconnectAttempt(const std::function<void(int, int, long)> &callback);
 
 private:
     /**
@@ -118,7 +118,7 @@ private:
      * 
      * @param connectFunc 连接函数
      */
-    void reconnectThread(std::function<bool()> connectFunc);
+    void reconnectThread(const std::function<bool()>& connectFunc);
     
     MqttConfig::ReconnectConfig config_;  ///< 重连配置
     

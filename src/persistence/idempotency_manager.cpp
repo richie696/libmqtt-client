@@ -8,6 +8,7 @@
 #include "mqtt_client/core/types.h"
 #include "mqtt_client/core/error.h"
 #include "mqtt_client/logger/logger_interface.h"
+#include <fmt/core.h>
 #include <sstream>
 #include <iomanip>
 #include <chrono>
@@ -54,7 +55,7 @@ IdempotencyManager::IdempotencyManager(
     
     // 从持久化恢复
     const auto result = recover();
-    LOG_INFO("恢复幂等去重结果: " + std::to_string(result.success));
+    LOG_INFO(fmt::format("恢复幂等去重结果: {}", result.success));
 }
 
 IdempotencyManager::~IdempotencyManager() {
@@ -66,7 +67,7 @@ IdempotencyManager::~IdempotencyManager() {
     
     // 持久化去重数据
     const auto result = persist();
-    LOG_INFO("持久化幂等去重结果：" + std::to_string(result.success));
+    LOG_INFO(fmt::format("持久化幂等去重结果：{}", result.success));
 }
 
 bool IdempotencyManager::isDuplicate(const std::string& messageHash) {
@@ -93,7 +94,7 @@ Result<bool> IdempotencyManager::markProcessed(const std::string& messageHash) {
     const time_t now = std::time(nullptr);
     duplicateRecords_[messageHash] = now;
     
-    LOG_DEBUG("标记消息已处理: " + messageHash);
+    LOG_DEBUG(fmt::format("标记消息已处理: {}", messageHash));
     return Result<bool>::Success(true);
 }
 
@@ -105,7 +106,7 @@ std::string IdempotencyManager::calculateMessageHash(const std::string& topic,
                                                      const std::string& payload,
                                                      QoS qos) {
     // 组合消息特征
-    std::string combined = topic + "|" + payload + "|" + std::to_string(static_cast<int>(qos));
+    std::string combined = fmt::format("{}|{}|{}", topic, payload, static_cast<int>(qos));
     
     // 使用简单的 hash 实现（仅用于测试）
     // 注意：生产环境建议使用专业的加密库（如 OpenSSL）进行 SHA-256 计算
@@ -113,13 +114,14 @@ std::string IdempotencyManager::calculateMessageHash(const std::string& topic,
     simple_sha256(reinterpret_cast<const unsigned char*>(combined.c_str()), 
                   combined.length(), hash);
     
-    // 转换为十六进制字符串
-    std::stringstream ss;
-    for (const unsigned char i : hash) {
-        ss << std::hex << std::setw(2) << std::setfill('0') << static_cast<int>(i);
+    // 转换为十六进制字符串（使用 fmt::format）
+    std::string result;
+    result.reserve(64);  // SHA-256 输出 32 字节 = 64 个十六进制字符
+    for (const unsigned char byte : hash) {
+        result += fmt::format("{:02x}", byte);
     }
     
-    return ss.str();
+    return result;
 }
 
 size_t IdempotencyManager::getDuplicateCount() const {
@@ -167,7 +169,7 @@ Result<bool> IdempotencyManager::recover() {
     
     auto result = persistenceManager_->loadIdempotencyRecords();
     if (!result.success) {
-        LOG_WARN("恢复幂等去重记录失败: " + result.error.message);
+        LOG_WARN(fmt::format("恢复幂等去重记录失败: {}", result.error.message));
         return Result<bool>::Success(true);  // 恢复失败不影响启动
     }
     
@@ -185,7 +187,7 @@ Result<bool> IdempotencyManager::recover() {
     
     duplicateRecords_ = std::move(result.value);
     
-    LOG_INFO("恢复幂等去重记录: " + std::to_string(duplicateRecords_.size()) + " 条");
+    LOG_INFO(fmt::format("恢复幂等去重记录: {} 条", duplicateRecords_.size()));
     return Result<bool>::Success(true);
 }
 
@@ -229,7 +231,7 @@ void IdempotencyManager::cleanupExpired() {
     }
     
     if (removedCount > 0) {
-        LOG_DEBUG("清理过期幂等去重记录: " + std::to_string(removedCount) + " 条");
+        LOG_DEBUG(fmt::format("清理过期幂等去重记录: {} 条", removedCount));
     }
 }
 

@@ -7,6 +7,7 @@
 #include "mqtt_client/persistence/storage_engine.h"
 #include "mqtt_client/core/error.h"
 #include "mqtt_client/logger/logger_interface.h"
+#include <fmt/core.h>
 #include <nlohmann/json.hpp>
 #include <fstream>
 #include <sstream>
@@ -158,7 +159,7 @@ Result<std::vector<MqttMessage>> PersistenceManager::loadSendQueue() {
             }
         }
         
-        LOG_DEBUG("加载发送队列: " + std::to_string(messages.size()) + " 条消息");
+        LOG_DEBUG(fmt::format("加载发送队列: {} 条消息", messages.size()));
         return Result<std::vector<MqttMessage>>::Success(messages);
     } catch (const std::exception& e) {
         return Result<std::vector<MqttMessage>>::Failure(
@@ -253,7 +254,7 @@ Result<std::vector<MqttMessage>> PersistenceManager::loadReceiveQueue() {
             }
         }
         
-        LOG_DEBUG("加载接收队列: " + std::to_string(messages.size()) + " 条消息");
+        LOG_DEBUG(fmt::format("加载接收队列: {} 条消息", messages.size()));
         return Result<std::vector<MqttMessage>>::Success(messages);
     } catch (const std::exception& e) {
         return Result<std::vector<MqttMessage>>::Failure(
@@ -308,7 +309,7 @@ Result<std::vector<Subscription>> PersistenceManager::loadSubscriptions() {
             }
         }
         
-        LOG_DEBUG("加载订阅信息: " + std::to_string(subs.size()) + " 个订阅");
+        LOG_DEBUG(fmt::format("加载订阅信息: {} 个订阅", subs.size()));
         return Result<std::vector<Subscription>>::Success(subs);
     } catch (const std::exception& e) {
         return Result<std::vector<Subscription>>::Failure(
@@ -406,7 +407,7 @@ Result<std::map<std::string, time_t>> PersistenceManager::loadIdempotencyRecords
             }
         }
         
-        LOG_DEBUG("加载幂等去重记录: " + std::to_string(records.size()) + " 条记录");
+        LOG_DEBUG(fmt::format("加载幂等去重记录: {} 条记录", records.size()));
         return Result<std::map<std::string, time_t>>::Success(records);
     } catch (const std::exception& e) {
         return Result<std::map<std::string, time_t>>::Failure(

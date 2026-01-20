@@ -119,7 +119,7 @@ TEST_F(EmbeddedMqttClientTest, Subscribe) {
     client_ = std::make_unique<EmbeddedMqttClient>(config_);
     
     if (client_->isInitialized()) {
-        MessageCallback callback = [](const std::string&, const std::string&, const MqttProperties&) {};
+        MessageCallback callback = [](std::string_view, std::string_view, const MqttProperties&) {};
         
         auto result = client_->subscribe("test/topic", callback, QoS::QOS_1);
         EXPECT_TRUE(result.success || !result.success);
@@ -164,7 +164,7 @@ TEST_F(EmbeddedMqttClientTest, SetErrorCallback) {
     client_ = std::make_unique<EmbeddedMqttClient>(config_);
     
     bool callbackCalled = false;
-    ErrorCallback callback = [&](const MqttError& error) {
+    ErrorCallback callback = [&](const MqttError& /*error*/) {
         callbackCalled = true;
     };
     

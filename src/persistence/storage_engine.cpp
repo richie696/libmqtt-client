@@ -6,6 +6,7 @@
 #include "mqtt_client/persistence/storage_engine.h"
 #include "mqtt_client/core/error.h"
 #include "mqtt_client/logger/logger_interface.h"
+#include <fmt/core.h>
 #include <fstream>
 #include <filesystem>
 #include <sstream>
@@ -16,7 +17,7 @@ FileStorageEngine::FileStorageEngine(std::string basePath)
     : basePath_(std::move(basePath)) {
     // 确保基础目录存在
     if (const auto result = ensureDirectory(basePath_); !result.success) {
-        LOG_ERROR("路径校验失败，错误原因：" + result.error.message);
+        LOG_ERROR(fmt::format("路径校验失败，错误原因：{}", result.error.message));
     }
 }
 
@@ -30,7 +31,7 @@ Result<bool> FileStorageEngine::write(const std::string& key, const std::string&
         if (auto dirResult = ensureDirectory(dirPath); !dirResult.success) {
             return Result<bool>::Failure(
                 MqttError(MqttErrorCode::PERSISTENCE_ERROR,
-                         "无法创建目录: " + dirPath));
+                         fmt::format("无法创建目录: {}", dirPath)));
         }
         
         // 写入文件（原子写入：先写临时文件，再重命名）
@@ -39,7 +40,7 @@ Result<bool> FileStorageEngine::write(const std::string& key, const std::string&
         if (!file.is_open()) {
             return Result<bool>::Failure(
                 MqttError(MqttErrorCode::PERSISTENCE_ERROR,
-                         "无法打开文件写入: " + tempPath));
+                         fmt::format("无法打开文件写入: {}", tempPath)));
         }
         
         // 显式转换 size_t 到 streamsize，避免窄化转换警告
@@ -50,18 +51,18 @@ Result<bool> FileStorageEngine::write(const std::string& key, const std::string&
             std::filesystem::remove(tempPath);
             return Result<bool>::Failure(
                 MqttError(MqttErrorCode::PERSISTENCE_ERROR,
-                         "写入文件失败: " + tempPath));
+                         fmt::format("写入文件失败: {}", tempPath)));
         }
         
         // 原子重命名
         std::filesystem::rename(tempPath, fullPath);
         
-        LOG_DEBUG("写入文件成功: " + fullPath);
+        LOG_DEBUG(fmt::format("写入文件成功: {}", fullPath));
         return Result<bool>::Success(true);
     } catch (const std::exception& e) {
         return Result<bool>::Failure(
             MqttError(MqttErrorCode::PERSISTENCE_ERROR,
-                     "写入文件异常: " + std::string(e.what())));
+                     fmt::format("写入文件异常: {}", e.what())));
     }
 }
 
@@ -79,7 +80,7 @@ Result<std::string> FileStorageEngine::read(const std::string& key) {
         if (!file.is_open()) {
             return Result<std::string>::Failure(
                 MqttError(MqttErrorCode::PERSISTENCE_ERROR,
-                         "无法打开文件读取: " + fullPath));
+                         fmt::format("无法打开文件读取: {}", fullPath)));
         }
         
         std::stringstream buffer;
@@ -87,12 +88,12 @@ Result<std::string> FileStorageEngine::read(const std::string& key) {
         file.close();
         
         std::string data = buffer.str();
-        LOG_DEBUG("读取文件成功: " + fullPath + ", 大小: " + std::to_string(data.length()));
+        LOG_DEBUG(fmt::format("读取文件成功: {}, 大小: {}", fullPath, data.length()));
         return Result<std::string>::Success(data);
     } catch (const std::exception& e) {
         return Result<std::string>::Failure(
             MqttError(MqttErrorCode::PERSISTENCE_ERROR,
-                     "读取文件异常: " + std::string(e.what())));
+                     fmt::format("读取文件异常: {}", e.what())));
     }
 }
 
@@ -106,16 +107,16 @@ Result<bool> FileStorageEngine::remove(const std::string& key) {
         }
 
         if (std::filesystem::remove(fullPath)) {
-            LOG_DEBUG("删除文件成功: " + fullPath);
+            LOG_DEBUG(fmt::format("删除文件成功: {}", fullPath));
             return Result<bool>::Success(true);
         }
         return Result<bool>::Failure(
             MqttError(MqttErrorCode::PERSISTENCE_ERROR,
-                      "删除文件失败: " + fullPath));
+                      fmt::format("删除文件失败: {}", fullPath)));
     } catch (const std::exception& e) {
         return Result<bool>::Failure(
             MqttError(MqttErrorCode::PERSISTENCE_ERROR,
-                     "删除文件异常: " + std::string(e.what())));
+                     fmt::format("删除文件异常: {}", e.what())));
     }
 }
 
@@ -125,7 +126,7 @@ bool FileStorageEngine::exists(const std::string& key) {
         return std::filesystem::exists(fullPath) && 
                std::filesystem::is_regular_file(fullPath);
     } catch (const std::exception& e) {
-        LOG_ERROR("检查文件存在性异常: " + std::string(e.what()));
+        LOG_ERROR(fmt::format("检查文件存在性异常: {}", e.what()));
         return false;
     }
 }
@@ -134,13 +135,13 @@ Result<bool> FileStorageEngine::clear() {
     try {
         if (std::filesystem::exists(basePath_)) {
             std::filesystem::remove_all(basePath_);
-            LOG_INFO("清空存储目录: " + basePath_);
+            LOG_INFO(fmt::format("清空存储目录: {}", basePath_));
         }
         return Result<bool>::Success(true);
     } catch (const std::exception& e) {
         return Result<bool>::Failure(
             MqttError(MqttErrorCode::PERSISTENCE_ERROR,
-                     "清空存储目录异常: " + std::string(e.what())));
+                     fmt::format("清空存储目录异常: {}", e.what())));
     }
 }
 
@@ -172,7 +173,7 @@ std::string FileStorageEngine::getFullPath(const std::string& key) const {
             }
             return Result<bool>::Failure(
                 MqttError(MqttErrorCode::PERSISTENCE_ERROR,
-                          "路径已存在但不是目录: " + path));
+                          fmt::format("路径已存在但不是目录: {}", path)));
         }
         
         // 创建目录（包括父目录）
@@ -182,12 +183,12 @@ std::string FileStorageEngine::getFullPath(const std::string& key) const {
         } else {
             return Result<bool>::Failure(
                 MqttError(MqttErrorCode::PERSISTENCE_ERROR,
-                         "无法创建目录: " + path));
+                         fmt::format("无法创建目录: {}", path)));
         }
     } catch (const std::exception& e) {
         return Result<bool>::Failure(
             MqttError(MqttErrorCode::PERSISTENCE_ERROR,
-                     "创建目录异常: " + std::string(e.what())));
+                     fmt::format("创建目录异常: {}", e.what())));
     }
 }
 

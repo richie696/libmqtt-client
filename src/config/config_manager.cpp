@@ -9,7 +9,7 @@
 #include <fstream>
 #include <algorithm>
 #include <filesystem>
-#include <fmt/format-inl.h>
+#include <fmt/core.h>
 
 namespace fs = std::filesystem;
 
@@ -260,7 +260,7 @@ MqttConfig MqttConfigManager::getDefaultConfig() {
 }
 
 Result<bool> MqttConfigManager::validate(const MqttConfig& config) {
-    std::vector<std::string> errors = getValidationErrors(config);
+    const std::vector<std::string> errors = getValidationErrors(config);
     if (errors.empty()) {
         return Result<bool>::Success(true);
     }

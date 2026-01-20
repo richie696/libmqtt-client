@@ -26,7 +26,7 @@ ReconnectManager::~ReconnectManager() {
     stopReconnect();
 }
 
-bool ReconnectManager::startReconnect(std::function<bool()> connectFunc) {
+bool ReconnectManager::startReconnect(const std::function<bool()>& connectFunc) {
     std::lock_guard lock(mutex_);
     
     if (reconnecting_.load()) {
@@ -92,7 +92,7 @@ void ReconnectManager::resetAttempts() {
     totalRetryTime_.store(0);
 }
 
-void ReconnectManager::setOnReconnectAttempt(std::function<void(int, int, long)> callback) {
+void ReconnectManager::setOnReconnectAttempt(const std::function<void(int, int, long)> &callback) {
     std::lock_guard lock(mutex_);
     onReconnectAttempt_ = callback;
 }
@@ -114,10 +114,10 @@ long ReconnectManager::calculateBackoffInterval(int attempt) const noexcept {
     if (config_.enableJitter) {
         std::lock_guard lock(randomMutex_);
         std::mt19937 gen(randomDevice_());
-        std::uniform_real_distribution<> dis(config_.minJitter, config_.maxJitter);
-        double jitterFactor = dis(gen);
+        std::uniform_real_distribution dis(config_.minJitter, config_.maxJitter);
+        const double jitterFactor = dis(gen);
         
-        interval = static_cast<long>(interval * jitterFactor);
+        interval = static_cast<long>(static_cast<double>(interval) * jitterFactor);
     }
     
     LOG_DEBUG("计算退避间隔: attempt=" + std::to_string(attempt) +
@@ -127,7 +127,7 @@ long ReconnectManager::calculateBackoffInterval(int attempt) const noexcept {
     return interval;
 }
 
-void ReconnectManager::reconnectThread(std::function<bool()> connectFunc) {
+void ReconnectManager::reconnectThread(const std::function<bool()>& connectFunc) {
     attemptCount_.store(0);
     
     while (!shouldStop_.load()) {

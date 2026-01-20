@@ -53,12 +53,12 @@ TEST_F(SubscriptionManagerTest, Subscribe) {
     std::string receivedTopic;
     std::string receivedPayload;
     
-    MessageCallback callback = [&](const std::string& topic,
-                                   const std::string& payload,
+    MessageCallback callback = [&](std::string_view topic,
+                                   std::string_view payload,
                                    const MqttProperties& properties) {
         callbackCalled = true;
-        receivedTopic = topic;
-        receivedPayload = payload;
+        receivedTopic = std::string(topic);
+        receivedPayload = std::string(payload);
     };
     
     auto result = subscriptionManager_->subscribe(
@@ -74,7 +74,7 @@ TEST_F(SubscriptionManagerTest, Subscribe) {
 // 测试取消订阅
 TEST_F(SubscriptionManagerTest, Unsubscribe) {
     // 先订阅
-    MessageCallback callback = [](const std::string&, const std::string&, const MqttProperties&) {};
+    MessageCallback callback = [](std::string_view, std::string_view, const MqttProperties&) {};
     subscriptionManager_->subscribe("test/topic", callback, QoS::QOS_1);
     
     // 取消订阅
@@ -85,7 +85,7 @@ TEST_F(SubscriptionManagerTest, Unsubscribe) {
 // 测试取消所有订阅
 TEST_F(SubscriptionManagerTest, UnsubscribeAll) {
     // 添加多个订阅
-    MessageCallback callback = [](const std::string&, const std::string&, const MqttProperties&) {};
+    MessageCallback callback = [](std::string_view, std::string_view, const MqttProperties&) {};
     subscriptionManager_->subscribe("test/topic1", callback, QoS::QOS_1);
     subscriptionManager_->subscribe("test/topic2", callback, QoS::QOS_1);
     
@@ -98,7 +98,7 @@ TEST_F(SubscriptionManagerTest, UnsubscribeAll) {
 
 // 测试检查是否已订阅
 TEST_F(SubscriptionManagerTest, IsSubscribed) {
-    MessageCallback callback = [](const std::string&, const std::string&, const MqttProperties&) {};
+    MessageCallback callback = [](std::string_view, std::string_view, const MqttProperties&) {};
     
     // 订阅前应该未订阅
     EXPECT_FALSE(subscriptionManager_->isSubscribed("test/topic"));
@@ -110,7 +110,7 @@ TEST_F(SubscriptionManagerTest, IsSubscribed) {
 
 // 测试获取已订阅主题列表
 TEST_F(SubscriptionManagerTest, GetSubscribedTopics) {
-    MessageCallback callback = [](const std::string&, const std::string&, const MqttProperties&) {};
+    MessageCallback callback = [](std::string_view, std::string_view, const MqttProperties&) {};
     
     // 初始应该为空
     auto topics = subscriptionManager_->getSubscribedTopics();
@@ -127,7 +127,7 @@ TEST_F(SubscriptionManagerTest, GetSubscribedTopics) {
 
 // 测试恢复订阅
 TEST_F(SubscriptionManagerTest, ResubscribeAll) {
-    MessageCallback callback = [](const std::string&, const std::string&, const MqttProperties&) {};
+    MessageCallback callback = [](std::string_view, std::string_view, const MqttProperties&) {};
     
     // 添加持久化订阅
     subscriptionManager_->subscribe("test/persistent", callback, QoS::QOS_1);
@@ -143,12 +143,12 @@ TEST_F(SubscriptionManagerTest, DispatchMessage) {
     std::string receivedTopic;
     std::string receivedPayload;
     
-    MessageCallback callback = [&](const std::string& topic,
-                                   const std::string& payload,
+    MessageCallback callback = [&](std::string_view topic,
+                                   std::string_view payload,
                                    const MqttProperties& properties) {
         callbackCalled = true;
-        receivedTopic = topic;
-        receivedPayload = payload;
+        receivedTopic = std::string(topic);
+        receivedPayload = std::string(payload);
     };
     
     // 订阅主题
@@ -164,7 +164,7 @@ TEST_F(SubscriptionManagerTest, DispatchMessage) {
 
 // 测试通配符订阅
 TEST_F(SubscriptionManagerTest, WildcardSubscription) {
-    MessageCallback callback = [](const std::string&, const std::string&, const MqttProperties&) {};
+    MessageCallback callback = [](std::string_view, std::string_view, const MqttProperties&) {};
     
     // 单级通配符
     auto result1 = subscriptionManager_->subscribe("test/+/status", callback, QoS::QOS_1);
@@ -177,7 +177,7 @@ TEST_F(SubscriptionManagerTest, WildcardSubscription) {
 
 // 测试不同QoS级别的订阅
 TEST_F(SubscriptionManagerTest, DifferentQoSLevels) {
-    MessageCallback callback = [](const std::string&, const std::string&, const MqttProperties&) {};
+    MessageCallback callback = [](std::string_view, std::string_view, const MqttProperties&) {};
     
     // QoS 0
     auto result0 = subscriptionManager_->subscribe("test/qos0", callback, QoS::QOS_0);

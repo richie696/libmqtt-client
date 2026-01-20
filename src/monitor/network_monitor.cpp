@@ -10,6 +10,7 @@
 #include <algorithm>
 #include <numeric>
 #include <deque>
+#include <fmt/core.h>
 
 using namespace std::chrono_literals;
 
@@ -21,7 +22,9 @@ using namespace std::chrono_literals;
     #include <sys/socket.h>
     #include <netinet/in.h>
     #include <arpa/inet.h>
+    #include <netdb.h>
     #include <unistd.h>
+    #include <cstring>
 #endif
 
 namespace mqtt_client {
@@ -136,7 +139,7 @@ void NetworkMonitor::monitorThread() {
                     try {
                         onNetworkRecovered_();
                     } catch (const std::exception& e) {
-                        LOG_ERROR("网络恢复回调执行失败: " + std::string(e.what()));
+                        LOG_ERROR(fmt::format("网络恢复回调执行失败: {}", e.what()));
                     }
                 }
             } else if (wasAvailable && !isAvailable) {
@@ -146,7 +149,7 @@ void NetworkMonitor::monitorThread() {
                     try {
                         onNetworkLost_();
                     } catch (const std::exception& e) {
-                        LOG_ERROR("网络丢失回调执行失败: " + std::string(e.what()));
+                        LOG_ERROR(fmt::format("网络丢失回调执行失败: {}", e.what()));
                     }
                 }
             }
@@ -158,7 +161,7 @@ void NetworkMonitor::monitorThread() {
                     try {
                         onQualityChanged_(currentQuality);
                     } catch (const std::exception& e) {
-                        LOG_ERROR("网络质量变化回调执行失败: " + std::string(e.what()));
+                        LOG_ERROR(fmt::format("网络质量变化回调执行失败: {}", e.what()));
                     }
                 }
             }
@@ -198,19 +201,43 @@ bool NetworkMonitor::checkNetworkConnectivity() {
     setsockopt(sock, SOL_SOCKET, SO_RCVTIMEO, &timeout, sizeof(timeout));
     setsockopt(sock, SOL_SOCKET, SO_SNDTIMEO, &timeout, sizeof(timeout));
     
-    // 连接测试
+    // 连接测试 - 支持IP地址和域名
     sockaddr_in server{};
+    std::memset(&server, 0, sizeof(server));
     server.sin_family = AF_INET;
     server.sin_port = htons(port_);
     
+    // 尝试将host解析为IP地址
     if (inet_pton(AF_INET, host_.c_str(), &server.sin_addr) <= 0) {
-        LOG_ERROR("无效的服务器地址: " + host_);
-        close(sock);
+        // 如果不是IP地址，使用getaddrinfo进行DNS解析
+        addrinfo hints{};
+        std::memset(&hints, 0, sizeof(hints));
+        hints.ai_family = AF_INET;
+        hints.ai_socktype = SOCK_STREAM;
+        
+        addrinfo* result = nullptr;
+        const int rc = getaddrinfo(host_.c_str(), nullptr, &hints, &result);
+        if (rc != 0 || result == nullptr) {
+            LOG_ERROR(fmt::format("DNS解析失败: {} ({})", host_, 
+                #ifdef _WIN32
+                    gai_strerrorA(rc)
+                #else
+                    gai_strerror(rc)
+                #endif
+            ));
+            close(sock);
 #ifdef _WIN32
-        WSACleanup();
+            WSACleanup();
 #endif
-        updateStats(false, -1);
-        return false;
+            updateStats(false, -1);
+            return false;
+        }
+        
+        // 使用第一个结果
+        const auto* addr_in = reinterpret_cast<struct sockaddr_in *>(result->ai_addr);
+        server.sin_addr = addr_in->sin_addr;
+        
+        freeaddrinfo(result);
     }
 
     // 测量延迟

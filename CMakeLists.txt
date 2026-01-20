@@ -509,7 +509,8 @@ if(USE_FETCHCONTENT)
     
     FetchContent_MakeAvailable(fmt)
     
-    target_link_libraries(mqtt_client PRIVATE fmt::fmt)
+    # 使用 PUBLIC 链接，确保依赖 mqtt_client 的目标也能访问 fmt
+    target_link_libraries(mqtt_client PUBLIC fmt::fmt)
     message(STATUS "fmt已配置")
     
     # yaml-cpp - YAML解析库（可选）

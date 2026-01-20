@@ -138,10 +138,10 @@ bool testTcpQoS(QoS qos) {
     
     // 订阅主题（使用相同的QoS级别）
     auto subscribeResult = client.subscribe(TEST_TOPIC, 
-                                             [&msgState](const std::string& topic, 
-                                                        const std::string& payload,
+                                             [&msgState](std::string_view topic, 
+                                                        std::string_view payload,
                                                         const MqttProperties& /*properties*/) {
-                                                 onMessage(&msgState, topic, payload, MqttProperties{});
+                                                 onMessage(&msgState, std::string(topic), std::string(payload), MqttProperties{});
                                              },
                                              qos);
     if (!subscribeResult.success) {
@@ -243,10 +243,10 @@ bool testTlsQoS(QoS qos) {
     
     // 订阅主题（使用相同的QoS级别）
     auto subscribeResult = client.subscribe(TEST_TOPIC, 
-                                             [&msgState](const std::string& topic, 
-                                                        const std::string& payload,
+                                             [&msgState](std::string_view topic, 
+                                                        std::string_view payload,
                                                         const MqttProperties& /*properties*/) {
-                                                 onMessage(&msgState, topic, payload, MqttProperties{});
+                                                 onMessage(&msgState, std::string(topic), std::string(payload), MqttProperties{});
                                              },
                                              qos);
     if (!subscribeResult.success) {

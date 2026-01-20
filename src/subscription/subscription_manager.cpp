@@ -7,6 +7,7 @@
 #include "mqtt_client/connection/connection_manager.h"
 #include "mqtt_client/adapter/wolfmqtt_adapter.h"
 #include "mqtt_client/logger/logger_interface.h"
+#include <fmt/core.h>
 #include <algorithm>
 
 namespace mqtt_client {
@@ -64,7 +65,7 @@ Result<bool> MqttSubscriptionManager::subscribe(std::string_view topic,
     auto it = subscriptions_.find(std::string(topic));
     if (it != subscriptions_.end()) {
         // 已订阅，更新回调和QoS
-        LOG_DEBUG("主题已订阅，更新回调: " + std::string(topic));
+        LOG_DEBUG(fmt::format("主题已订阅，更新回调: {}", topic));
         it->second.callback = callback;
         it->second.qos = qos;
         return Result<bool>::Success(true);
@@ -81,7 +82,7 @@ Result<bool> MqttSubscriptionManager::subscribe(std::string_view topic,
         
         subscriptions_[sub.topic] = sub;
         
-        LOG_DEBUG("未连接，保存订阅信息: " + sub.topic);
+        LOG_DEBUG(fmt::format("未连接，保存订阅信息: {}", sub.topic));
         return Result<bool>::Success(true);
     }
     
@@ -107,7 +108,7 @@ Result<bool> MqttSubscriptionManager::subscribe(std::string_view topic,
     
     subscriptions_[sub.topic] = sub;
     
-    LOG_DEBUG("订阅成功: " + sub.topic + " (QoS: " + std::to_string(static_cast<int>(qos)) + ")");
+    LOG_DEBUG(fmt::format("订阅成功: {} (QoS: {})", sub.topic, static_cast<int>(qos)));
     
     return Result<bool>::Success(true);
 }
@@ -118,7 +119,7 @@ Result<bool> MqttSubscriptionManager::unsubscribe(std::string_view topic) {
     // 检查是否已订阅
     auto it = subscriptions_.find(std::string(topic));
     if (it == subscriptions_.end()) {
-        LOG_DEBUG("主题未订阅: " + std::string(topic));
+        LOG_DEBUG(fmt::format("主题未订阅: {}", topic));
         return Result<bool>::Success(true);  // 未订阅也算成功
     }
     
@@ -128,7 +129,7 @@ Result<bool> MqttSubscriptionManager::unsubscribe(std::string_view topic) {
         if (adapter) {
             auto result = adapter->unsubscribe(topic);
             if (!result) {
-                LOG_WARN("取消订阅失败: " + std::string(topic));
+                LOG_WARN(fmt::format("取消订阅失败: {}", topic));
                 // 即使取消订阅失败，也从缓存中移除
             }
         }
@@ -137,7 +138,7 @@ Result<bool> MqttSubscriptionManager::unsubscribe(std::string_view topic) {
     // 从缓存中移除
     subscriptions_.erase(it);
     
-    LOG_DEBUG("取消订阅成功: " + std::string(topic));
+    LOG_DEBUG(fmt::format("取消订阅成功: {}", topic));
     
     return Result<bool>::Success(true);
 }
@@ -181,11 +182,11 @@ Result<bool> MqttSubscriptionManager::resubscribeAll() {
     for (auto& [topic, sub] : subscriptions_) {
         auto result = adapter->subscribe(topic, sub.qos);
         if (!result) {
-            LOG_WARN("恢复订阅失败: " + topic);
+            LOG_WARN(fmt::format("恢复订阅失败: {}", topic));
             // 继续处理其他订阅
         } else {
             sub.subscribedTime = std::time(nullptr);
-            LOG_DEBUG("恢复订阅成功: " + topic);
+            LOG_DEBUG(fmt::format("恢复订阅成功: {}", topic));
         }
     }
     
@@ -204,7 +205,7 @@ void MqttSubscriptionManager::dispatchMessage(std::string_view topic,
             try {
                 it->second.callback(topic, payload, properties);
             } catch (const std::exception& e) {
-                LOG_ERROR("消息回调执行失败: " + std::string(e.what()));
+                LOG_ERROR(fmt::format("消息回调执行失败: {}", e.what()));
             }
         }
         return;
@@ -217,7 +218,7 @@ void MqttSubscriptionManager::dispatchMessage(std::string_view topic,
                 try {
                     sub.callback(topic, payload, properties);
                 } catch (const std::exception& e) {
-                    LOG_ERROR("消息回调执行失败: " + std::string(e.what()));
+                    LOG_ERROR(fmt::format("消息回调执行失败: {}", e.what()));
                 }
             }
             // 注意：可能有多个匹配，继续查找所有匹配的订阅

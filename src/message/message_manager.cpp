@@ -7,6 +7,7 @@
 #include "mqtt_client/connection/connection_manager.h"
 #include "mqtt_client/adapter/wolfmqtt_adapter.h"
 #include "mqtt_client/logger/logger_interface.h"
+#include <fmt/core.h>
 #include <chrono>
 
 using namespace std::chrono_literals;
@@ -63,7 +64,7 @@ Result<bool> MqttMessageManager::publish(const std::string& topic,
     if (payload.length() > maxSize) {
         return Result<bool>::Failure(
             MqttError(MqttErrorCode::MESSAGE_TOO_LARGE,
-                     "消息过大: " + std::to_string(payload.length()) + " 字节"));
+                     fmt::format("消息过大: {} 字节", payload.length())));
     }
     
     // 创建消息对象
@@ -135,7 +136,7 @@ Result<bool> MqttMessageManager::queueMessage(const std::string& topic,
     if (queue_.size() >= config_.messageQueue.maxSendQueueSize) {
         // 1. 低优先级消息：直接丢弃新消息，保护队列中已有的更重要消息
         if (msg.priority < 5) {  // 低优先级消息阈值，可根据配置调整
-            LOG_WARN("消息队列已满，丢弃低优先级消息: " + msg.topic);
+            LOG_WARN(fmt::format("消息队列已满，丢弃低优先级消息: {}", msg.topic));
             return Result<bool>::Failure(
                 MqttError(MqttErrorCode::QUEUE_FULL,
                          "消息队列已满，已丢弃低优先级消息"));
@@ -164,10 +165,8 @@ Result<bool> MqttMessageManager::queueMessage(const std::string& topic,
         const QueuedMessage dropped = *dropIt;
 
         // 记录被淘汰的消息 （便于运维排查）
-        LOG_WARN("消息队列已满，淘汰低优先级消息: topic=" + dropped.topic +
-                 ", priority=" + std::to_string(dropped.priority) +
-                 "; 保留新高优先级消息: topic=" + msg.topic +
-                 ", priority=" + std::to_string(msg.priority));
+        LOG_WARN(fmt::format("消息队列已满，淘汰低优先级消息: topic={}, priority={}; 保留新高优先级消息: topic={}, priority={}",
+                             dropped.topic, dropped.priority, msg.topic, msg.priority));
 
         // 从缓冲区中移除被淘汰的消息
         buffer.erase(dropIt);
@@ -240,7 +239,7 @@ void MqttMessageManager::processQueue() {
                 }
             } else {
                 // 超过重试次数，丢弃消息
-                LOG_ERROR("消息重试次数超限，丢弃: " + msg.topic);
+                LOG_ERROR(fmt::format("消息重试次数超限，丢弃: {}", msg.topic));
                 updateStats(false);
             }
         } else {
@@ -305,7 +304,7 @@ void MqttMessageManager::processBatch() {
     // 批量发送消息
     for (const auto& msg : batchQueue_) {
         if (const auto result = sendMessage(msg); !result.success) {
-            LOG_ERROR("批量消息中存在失败消息：" + msg.messageId);
+            LOG_ERROR(fmt::format("批量消息中存在失败消息：{}", msg.messageId));
         }
     }
     
@@ -348,10 +347,10 @@ void MqttMessageManager::messageThread() {
                     if (msg.retryCount < config_.messageQueue.maxRetry) {
                         msg.retryCount++;
                         if (auto sendResult = queueMessage(msg.topic, msg.payload, msg.qos, msg.retained, msg.priority); !sendResult.success) {
-                            LOG_ERROR("消息重试入队失败，丢弃：" + msg.messageId);
+                            LOG_ERROR(fmt::format("消息重试入队失败，丢弃：{}", msg.messageId));
                         }
                     } else {
-                        LOG_ERROR("消息重试次数超限，丢弃: " + msg.topic);
+                        LOG_ERROR(fmt::format("消息重试次数超限，丢弃: {}", msg.topic));
                         updateStats(false);
                     }
                 }

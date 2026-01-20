@@ -10,11 +10,7 @@
 #include <atomic>
 #include <chrono>
 #include <thread>
-#include <fmt/format-inl.h>
-
-#ifdef ENABLE_FMT
 #include <fmt/core.h>
-#endif
 
 using namespace std::chrono_literals;
 

@@ -218,8 +218,8 @@ public:
      * @return Result<bool> 订阅结果
      */
     [[nodiscard]] Result<bool> subscribe(std::string_view topic,
-                                         MessageCallback callback,
-                                         QoS qos = QoS::QOS_0);
+                                         const MessageCallback &callback,
+                                         QoS qos = QoS::QOS_0) const;
     
     /**
      * @brief 取消订阅

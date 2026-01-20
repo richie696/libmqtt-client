@@ -6,9 +6,9 @@
 #include "mqtt_client/monitor/heartbeat_manager.h"
 #include "mqtt_client/message/message_manager.h"
 #include "mqtt_client/logger/logger_interface.h"
+#include <fmt/core.h>
 #include <chrono>
-#include <sstream>
-#include <iomanip>
+#include <ctime>
 
 using namespace std::chrono_literals;
 
@@ -65,11 +65,10 @@ bool HeartbeatManager::sendHeartbeat() {
     auto ms = std::chrono::duration_cast<std::chrono::milliseconds>(
         now.time_since_epoch()) % 1000;
     
-    std::ostringstream oss;
-    oss << std::put_time(std::localtime(&timeT), "%Y-%m-%d %H:%M:%S");
-    oss << "." << std::setfill('0') << std::setw(3) << ms.count();
-    
-    std::string payload = oss.str();
+    // 格式化时间戳（使用 fmt::format）
+    char timeStr[32];
+    std::strftime(timeStr, sizeof(timeStr), "%Y-%m-%d %H:%M:%S", std::localtime(&timeT));
+    std::string payload = fmt::format("{}.{:03d}", timeStr, ms.count());
     
     auto startTime = std::chrono::steady_clock::now();
     
