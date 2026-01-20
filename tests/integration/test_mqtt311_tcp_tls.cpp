@@ -15,16 +15,18 @@
 #include <vector>
 #include <string>
 #include <map>
+
 #include "mqtt_client/embedded_mqtt_client.h"
 #include "mqtt_client/config/config.h"
 #include "mqtt_client/config/config_manager.h"
+#include "mqtt_client/core/types.h"
 
 using namespace mqtt_client;
 
 // 测试服务器配置
 const std::string TEST_SERVER_HOST = "mqtt-d8o3b4va-nj-public.mqtt.tencenttdmq.com";
-const int TEST_TCP_PORT = 1883;
-const int TEST_TLS_PORT = 8883;
+constexpr int TEST_TCP_PORT = 1883;
+constexpr int TEST_TLS_PORT = 8883;
 const std::string TEST_USERNAME = "ply_user";
 const std::string TEST_PASSWORD = "sk73ca48bdd3d58cf1";
 const std::string TEST_TOPIC = "testtopic/hello";
@@ -40,7 +42,7 @@ struct MessageState {
     std::chrono::steady_clock::time_point receiveTime;  // 消息接收时间
     
     void reset() {
-        std::lock_guard lock(mutex);
+        std::lock_guard<std::mutex> lock(mutex);
         receivedMessages.clear();
         messageReceived = false;
         expectedCount = 0;
@@ -50,7 +52,7 @@ struct MessageState {
 
 // 创建TCP配置
 MqttConfig createTcpConfig() {
-    MqttConfig config = MqttConfigManager::getInstance().getDefaultConfig();
+    MqttConfig config = MqttConfigManager::getDefaultConfig();
     config.server.host = TEST_SERVER_HOST;
     config.server.port = TEST_TCP_PORT;
     config.server.useSSL = false;
@@ -80,8 +82,8 @@ MqttConfig createTlsConfig() {
 // 消息回调
 void onMessage(MessageState* state, const std::string& topic, const std::string& payload, 
                const MqttProperties& /*properties*/) {
-    std::lock_guard lock(state->mutex);
-    state->receivedMessages.push_back({topic, payload});
+    std::lock_guard<std::mutex> lock(state->mutex);
+    state->receivedMessages.emplace_back(topic, payload);
     state->receivedCount++;
     state->messageReceived = true;
     state->receiveTime = std::chrono::steady_clock::now();  // 记录接收时间
@@ -91,7 +93,7 @@ void onMessage(MessageState* state, const std::string& topic, const std::string&
 
 // 等待消息接收
 bool waitForMessages(MessageState* state, int timeoutSeconds = 10) {
-    std::unique_lock lock(state->mutex);
+    std::unique_lock<std::mutex> lock(state->mutex);
     return state->cv.wait_for(lock, std::chrono::seconds(timeoutSeconds), 
                               [state] { 
                                   return state->receivedCount >= state->expectedCount; 
@@ -180,7 +182,7 @@ bool testTcpQoS(QoS qos) {
     std::vector<std::pair<std::string, std::string>> receivedMsgs;
     std::chrono::steady_clock::time_point receiveTime;
     {
-        std::lock_guard lock(msgState.mutex);
+        std::lock_guard<std::mutex> lock(msgState.mutex);
         receivedCount = msgState.receivedMessages.size();
         receivedMsgs = msgState.receivedMessages;
         receiveTime = msgState.receiveTime;
@@ -194,7 +196,7 @@ bool testTcpQoS(QoS qos) {
     
     if (found) {
         // 计算总耗时（毫秒）
-        auto elapsed = std::chrono::duration_cast<std::chrono::milliseconds>(
+        const auto elapsed = std::chrono::duration_cast<std::chrono::milliseconds>(
             receiveTime - publishStartTime).count();
         std::cout << "    ✓ " << qosToString(qos) << " 测试通过 (耗时: " << elapsed << " ms)" << std::endl;
         client.disconnect();
@@ -285,7 +287,7 @@ bool testTlsQoS(QoS qos) {
     std::vector<std::pair<std::string, std::string>> receivedMsgs;
     std::chrono::steady_clock::time_point receiveTime;
     {
-        std::lock_guard lock(msgState.mutex);
+        std::lock_guard<std::mutex> lock(msgState.mutex);
         receivedCount = msgState.receivedMessages.size();
         receivedMsgs = msgState.receivedMessages;
         receiveTime = msgState.receiveTime;

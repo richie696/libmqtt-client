@@ -320,13 +320,37 @@ Result<bool> WolfMqttAdapter::disconnect() {
         return Result<bool>::Success(true);
     }
     
-    // 先停止消息接收线程
+    // 先标记为已断开，让消息接收线程知道应该退出
+    connected_.store(false);
+    
+    // 停止消息接收线程（在关闭socket之前）
     if (messageThreadRunning_.load()) {
         messageThreadRunning_.store(false);
         lock.unlock();  // 释放锁，避免死锁
+        
+        // 等待线程结束（最多等待2秒，避免无限等待）
         if (messageThread_.joinable()) {
-            messageThread_.join();
+            // 使用超时等待，避免卡死
+            auto timeout = std::chrono::steady_clock::now() + std::chrono::seconds(2);
+            while (messageThread_.joinable() && 
+                   std::chrono::steady_clock::now() < timeout) {
+                std::this_thread::sleep_for(std::chrono::milliseconds(100));
+            }
+            
+            // 如果线程还在运行，强制关闭socket让线程退出
+            if (messageThread_.joinable()) {
+                lock.lock();
+                if (networkContext_.socketFd >= 0) {
+                    ::close(networkContext_.socketFd);
+                    networkContext_.socketFd = -1;
+                }
+                lock.unlock();
+                
+                // 再次等待线程结束
+                messageThread_.join();
+            }
         }
+        
         lock.lock();
     }
     
@@ -336,23 +360,23 @@ Result<bool> WolfMqttAdapter::disconnect() {
     
 #ifdef WOLFMQTT_ENABLED
     if (wolfClient_) {
-        // 先发送MQTT断开包
-        if (const int rc = MqttClient_Disconnect(wolfClient_.get()); rc != MQTT_CODE_SUCCESS) {
-            // 即使断开失败，也标记为已断开
-            LOG_WARN("MQTT断开时出错: " + std::to_string(rc));
+        // 先发送MQTT断开包（在socket关闭之前）
+        if (networkContext_.socketFd >= 0) {
+            if (const int rc = MqttClient_Disconnect(wolfClient_.get()); rc != MQTT_CODE_SUCCESS) {
+                // 断开包发送失败，记录日志但不影响断开流程
+                LOG_DEBUG("MQTT断开包发送结果: " + std::to_string(rc));
+            }
         }
         
         // 然后断开网络连接
         MqttClient_NetDisconnect(wolfClient_.get());
     }
     
-    // 确保socket已关闭
+    // 最后关闭socket
     if (networkContext_.socketFd >= 0) {
         ::close(networkContext_.socketFd);
         networkContext_.socketFd = -1;
     }
-    
-    connected_.store(false);
     
     // 调用连接回调
     if (connectionCallback_) {
@@ -1184,8 +1208,9 @@ int WolfMqttAdapter::networkSend(void* context, const byte* buf, int buf_len, [[
     const auto* adapter = static_cast<WolfMqttAdapter*>(context);
     const NetworkContext* netCtx = &adapter->networkContext_;
     
+    // 检查socket是否有效（可能在disconnect时被关闭）
     if (netCtx->socketFd < 0) {
-        LOG_ERROR("网络发送失败: socket无效");
+        // socket已关闭，返回网络错误（不记录错误日志，这是正常情况）
         return MQTT_CODE_ERROR_NETWORK;
     }
     
@@ -1220,8 +1245,9 @@ int WolfMqttAdapter::networkRecv(void* context, byte* buf, const int buf_len, co
     const auto* adapter = static_cast<WolfMqttAdapter*>(context);
     const NetworkContext* netCtx = &adapter->networkContext_;
     
+    // 检查socket是否有效（可能在disconnect时被关闭）
     if (netCtx->socketFd < 0) {
-        LOG_ERROR("网络接收失败: socket无效");
+        // socket已关闭，返回网络错误，让调用者知道连接已断开
         return MQTT_CODE_ERROR_NETWORK;
     }
     
@@ -1252,7 +1278,15 @@ int WolfMqttAdapter::networkRecv(void* context, byte* buf, const int buf_len, co
     // 等待数据就绪
     const int selectResult = ::select(netCtx->socketFd + 1, &readfds, nullptr, &errfds, &tv);
     if (selectResult < 0) {
-        LOG_ERROR("select失败: errno=" + std::to_string(errno));
+        const int err = errno;
+        // 如果socket在select期间被关闭，errno可能是EBADF(9)
+        // 这是正常情况（disconnect时关闭socket），不需要记录错误日志
+        if (err == EBADF) {
+            // socket已关闭，返回网络错误
+            return MQTT_CODE_ERROR_NETWORK;
+        }
+        // 其他错误才记录日志
+        LOG_ERROR("select失败: errno=" + std::to_string(err));
         return MQTT_CODE_ERROR_NETWORK;
     }
     

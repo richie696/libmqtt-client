@@ -319,6 +319,10 @@ set_target_properties(mqtt_client PROPERTIES
 # 包含FetchContent模块（CMake 3.11+）
 include(FetchContent)
 
+# 设置 FetchContent 选项
+set(FETCHCONTENT_QUIET OFF)  # 显示下载进度
+set(FETCHCONTENT_UPDATES_DISCONNECTED ON)  # 允许离线模式
+
 # 依赖管理选项
 option(USE_FETCHCONTENT "Use FetchContent for dependency management" ON)
 option(USE_GIT_SUBMODULE "Use Git Submodule for core dependencies (wolfMQTT)" ON)
@@ -455,6 +459,7 @@ if(USE_FETCHCONTENT)
             GIT_REPOSITORY https://github.com/nlohmann/json.git
             GIT_TAG        v3.11.3
             GIT_SHALLOW    TRUE
+            GIT_PROGRESS   TRUE  # 显示下载进度
         )
         
         # 设置策略以兼容旧版本
@@ -466,9 +471,12 @@ if(USE_FETCHCONTENT)
         endif()
         
         # 对于header-only库，使用Populate方式创建接口目标
+        message(STATUS "正在下载 nlohmann/json (这可能需要一些时间，请耐心等待)...")
         FetchContent_GetProperties(nlohmann_json)
         if(NOT nlohmann_json_POPULATED)
             FetchContent_Populate(nlohmann_json)
+            message(STATUS "nlohmann/json 下载完成: ${nlohmann_json_SOURCE_DIR}")
+            
             # 创建接口库（header-only）
             add_library(nlohmann_json INTERFACE)
             target_include_directories(nlohmann_json INTERFACE 
@@ -506,8 +514,10 @@ if(USE_FETCHCONTENT)
         fmt
         GIT_REPOSITORY https://github.com/fmtlib/fmt.git
         GIT_TAG        10.1.1
+        GIT_PROGRESS   TRUE  # 显示下载进度
     )
     
+    message(STATUS "正在下载 fmt (这可能需要一些时间，请耐心等待)...")
     FetchContent_MakeAvailable(fmt)
     
     # 使用 PUBLIC 链接，确保依赖 mqtt_client 的目标也能访问 fmt
@@ -524,9 +534,11 @@ if(USE_FETCHCONTENT)
             GIT_REPOSITORY https://github.com/jbeder/yaml-cpp.git
             GIT_TAG        master  # 使用 master 分支，已修复 CMake 兼容性问题
             GIT_SHALLOW    TRUE
+            GIT_PROGRESS   TRUE  # 显示下载进度
         )
         
         # 使用 Populate + add_subdirectory 方式，可以在配置前设置策略
+        message(STATUS "正在下载 yaml-cpp (这可能需要一些时间，请耐心等待)...")
         FetchContent_GetProperties(yaml-cpp)
         if(NOT yaml-cpp_POPULATED)
             FetchContent_Populate(yaml-cpp)

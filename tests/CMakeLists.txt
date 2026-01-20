@@ -2,6 +2,11 @@
 # 测试配置
 # ============================================================================
 
+# 设置C++标准
+set(CMAKE_CXX_STANDARD 17)
+set(CMAKE_CXX_STANDARD_REQUIRED ON)
+set(CMAKE_CXX_EXTENSIONS OFF)
+
 # 启用测试
 enable_testing()
 
@@ -53,6 +58,12 @@ if(GTest_FOUND OR TARGET gtest)
             GTest::gtest_main
     )
     
+    # 确保使用 C++17 标准
+    set_target_properties(test_core PROPERTIES
+        CXX_STANDARD 17
+        CXX_STANDARD_REQUIRED ON
+    )
+    
     gtest_discover_tests(test_core)
     
     # 配置管理测试
@@ -65,6 +76,12 @@ if(GTest_FOUND OR TARGET gtest)
             mqtt_client
             GTest::gtest
             GTest::gtest_main
+    )
+    
+    # 确保使用 C++17 标准
+    set_target_properties(test_config PROPERTIES
+        CXX_STANDARD 17
+        CXX_STANDARD_REQUIRED ON
     )
     
     gtest_discover_tests(test_config)
@@ -81,6 +98,12 @@ if(GTest_FOUND OR TARGET gtest)
             GTest::gtest_main
     )
     
+    # 确保使用 C++17 标准
+    set_target_properties(test_connection PROPERTIES
+        CXX_STANDARD 17
+        CXX_STANDARD_REQUIRED ON
+    )
+    
     gtest_discover_tests(test_connection)
     
     # 消息管理测试
@@ -95,6 +118,12 @@ if(GTest_FOUND OR TARGET gtest)
             GTest::gtest_main
     )
     
+    # 确保使用 C++17 标准
+    set_target_properties(test_message PROPERTIES
+        CXX_STANDARD 17
+        CXX_STANDARD_REQUIRED ON
+    )
+    
     gtest_discover_tests(test_message)
     
     # 订阅管理测试
@@ -107,6 +136,12 @@ if(GTest_FOUND OR TARGET gtest)
             mqtt_client
             GTest::gtest
             GTest::gtest_main
+    )
+    
+    # 确保使用 C++17 标准
+    set_target_properties(test_subscription PROPERTIES
+        CXX_STANDARD 17
+        CXX_STANDARD_REQUIRED ON
     )
     
     gtest_discover_tests(test_subscription)
@@ -125,6 +160,12 @@ if(GTest_FOUND OR TARGET gtest)
             GTest::gtest_main
     )
     
+    # 确保使用 C++17 标准
+    set_target_properties(test_monitor PROPERTIES
+        CXX_STANDARD 17
+        CXX_STANDARD_REQUIRED ON
+    )
+    
     gtest_discover_tests(test_monitor)
     
     # 重连管理测试
@@ -139,6 +180,12 @@ if(GTest_FOUND OR TARGET gtest)
             GTest::gtest_main
     )
     
+    # 确保使用 C++17 标准
+    set_target_properties(test_reconnect PROPERTIES
+        CXX_STANDARD 17
+        CXX_STANDARD_REQUIRED ON
+    )
+    
     gtest_discover_tests(test_reconnect)
     
     # 主客户端集成测试
@@ -151,6 +198,12 @@ if(GTest_FOUND OR TARGET gtest)
             mqtt_client
             GTest::gtest
             GTest::gtest_main
+    )
+    
+    # 确保使用 C++17 标准
+    set_target_properties(test_client PROPERTIES
+        CXX_STANDARD 17
+        CXX_STANDARD_REQUIRED ON
     )
     
     gtest_discover_tests(test_client)
@@ -171,6 +224,18 @@ if(GTest_FOUND OR TARGET gtest)
             mqtt_client
     )
     
+    # 显式设置包含目录（确保 IDE 能正确识别）
+    target_include_directories(test_mqtt5_tcp_tls
+        PRIVATE
+            ${CMAKE_SOURCE_DIR}/include
+    )
+    
+    # 确保使用 C++17 标准（CTAD 需要）
+    set_target_properties(test_mqtt5_tcp_tls PROPERTIES
+        CXX_STANDARD 17
+        CXX_STANDARD_REQUIRED ON
+    )
+    
     message(STATUS "MQTT 5.0 测试程序已添加")
     
     # MQTT 3.1.1 TCP和TLS测试程序
@@ -181,6 +246,18 @@ if(GTest_FOUND OR TARGET gtest)
     target_link_libraries(test_mqtt311_tcp_tls
         PRIVATE
             mqtt_client
+    )
+    
+    # 显式设置包含目录（确保 IDE 能正确识别）
+    target_include_directories(test_mqtt311_tcp_tls
+        PRIVATE
+            ${CMAKE_SOURCE_DIR}/include
+    )
+    
+    # 确保使用 C++17 标准（CTAD 需要）
+    set_target_properties(test_mqtt311_tcp_tls PROPERTIES
+        CXX_STANDARD 17
+        CXX_STANDARD_REQUIRED ON
     )
     
     message(STATUS "MQTT 3.1.1 测试程序已添加")

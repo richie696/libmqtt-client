@@ -23,8 +23,8 @@ using namespace mqtt_client;
 
 // 测试服务器配置
 const std::string TEST_SERVER_HOST = "mqtt-d8o3b4va-nj-public.mqtt.tencenttdmq.com";
-const int TEST_TCP_PORT = 1883;
-const int TEST_TLS_PORT = 8883;
+constexpr int TEST_TCP_PORT = 1883;
+constexpr int TEST_TLS_PORT = 8883;
 const std::string TEST_USERNAME = "ply_user";
 const std::string TEST_PASSWORD = "sk73ca48bdd3d58cf1";
 const std::string TEST_TOPIC = "testtopic/hello";
@@ -40,7 +40,7 @@ struct MessageState {
     std::chrono::steady_clock::time_point receiveTime;  // 消息接收时间
     
     void reset() {
-        std::lock_guard lock(mutex);
+        std::lock_guard<std::mutex> lock(mutex);
         receivedMessages.clear();
         messageReceived = false;
         expectedCount = 0;
@@ -80,7 +80,7 @@ MqttConfig createTlsConfig() {
 // 消息回调
 void onMessage(MessageState* state, const std::string& topic, const std::string& payload, 
                const MqttProperties& /*properties*/) {
-    std::lock_guard lock(state->mutex);
+    std::lock_guard<std::mutex> lock(state->mutex);
     state->receivedMessages.push_back({topic, payload});
     state->receivedCount++;
     state->messageReceived = true;
@@ -177,7 +177,7 @@ bool testTcpQoS(QoS qos) {
         bool found = false;
         std::chrono::steady_clock::time_point receiveTime;
         {
-            std::lock_guard lock(msgState.mutex);
+            std::lock_guard<std::mutex> lock(msgState.mutex);
             receiveTime = msgState.receiveTime;
             for (const auto& msg : msgState.receivedMessages) {
                 if (msg.first == TEST_TOPIC && msg.second == testMessage) {
@@ -198,7 +198,7 @@ bool testTcpQoS(QoS qos) {
             std::cout << "    ✗ 消息内容验证失败" << std::endl;
             // 输出调试信息
             {
-                std::lock_guard lock(msgState.mutex);
+                std::lock_guard<std::mutex> lock(msgState.mutex);
                 std::cout << "    期望消息: " << testMessage << std::endl;
                 std::cout << "    收到消息数: " << msgState.receivedMessages.size() << std::endl;
                 for (const auto& msg : msgState.receivedMessages) {
@@ -284,7 +284,7 @@ bool testTlsQoS(QoS qos) {
         bool found = false;
         std::chrono::steady_clock::time_point receiveTime;
         {
-            std::lock_guard lock(msgState.mutex);
+            std::lock_guard<std::mutex> lock(msgState.mutex);
             receiveTime = msgState.receiveTime;
             for (const auto& msg : msgState.receivedMessages) {
                 if (msg.first == TEST_TOPIC && msg.second == testMessage) {
@@ -305,7 +305,7 @@ bool testTlsQoS(QoS qos) {
             std::cout << "    ✗ 消息内容验证失败" << std::endl;
             // 输出调试信息
             {
-                std::lock_guard lock(msgState.mutex);
+                std::lock_guard<std::mutex> lock(msgState.mutex);
                 std::cout << "    期望消息: " << testMessage << std::endl;
                 std::cout << "    收到消息数: " << msgState.receivedMessages.size() << std::endl;
                 for (const auto& msg : msgState.receivedMessages) {

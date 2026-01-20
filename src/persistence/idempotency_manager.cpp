@@ -109,15 +109,24 @@ std::string IdempotencyManager::calculateMessageHash(const std::string& topic,
     std::string combined = fmt::format("{}|{}|{}", topic, payload, static_cast<int>(qos));
     
     // 使用简单的 hash 实现（仅用于测试）
-    // 注意：生产环境建议使用专业的加密库（如 OpenSSL）进行 SHA-256 计算
+    // 注意：
+    // - simple_sha256 目前只在前 sizeof(size_t) 字节写入有效数据，剩余字节填 0
+    // - 为避免生成包含大量尾部 '0' 的十六进制字符串，这里只使用前 effectiveLen 字节
+    //   作为幂等键（信息量与 std::hash<size_t> 等价）
     unsigned char hash[32];
     simple_sha256(reinterpret_cast<const unsigned char*>(combined.c_str()), 
                   combined.length(), hash);
     
+    // 只编码前 effectiveLen 字节，避免尾部全 0 造成日志/存储中长串 0
+    constexpr std::size_t effectiveLen = (sizeof(std::size_t) < 32)
+        ? sizeof(std::size_t)
+        : std::size_t(32);
+
     // 转换为十六进制字符串（使用 fmt::format）
     std::string result;
-    result.reserve(64);  // SHA-256 输出 32 字节 = 64 个十六进制字符
-    for (const unsigned char byte : hash) {
+    result.reserve(effectiveLen * 2);
+    for (std::size_t i = 0; i < effectiveLen; ++i) {
+        const unsigned char byte = hash[i];
         result += fmt::format("{:02x}", byte);
     }
     
@@ -198,19 +207,24 @@ void IdempotencyManager::clear() {
 }
 
 void IdempotencyManager::cleanupThread() {
+    // 使用短周期睡眠累积到 cleanupInterval_，保证析构时能快速退出
     while (running_.load()) {
-        std::this_thread::sleep_for(std::chrono::seconds{cleanupInterval_});
-        
+        time_t slept = 0;
+        while (running_.load() && slept < cleanupInterval_) {
+            std::this_thread::sleep_for(1s);
+            ++slept;
+        }
+
         if (!running_.load()) {
             break;
         }
-        
+
         // 清理过期数据
         {
             std::lock_guard lock(mutex_);
             cleanupExpired();
         }
-        
+
         // 持久化（可选，避免频繁写入）
         // persist();
     }
