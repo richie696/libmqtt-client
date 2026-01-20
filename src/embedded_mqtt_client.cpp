@@ -167,6 +167,7 @@ namespace {
 EmbeddedMqttClient::EmbeddedMqttClient()
     : initialized_(false)
     , connected_(false)
+    , metrics_()
 {
     // 首次创建客户端时输出库初始化信息（仅输出一次）
     static std::once_flag log_once_flag;
@@ -177,6 +178,7 @@ EmbeddedMqttClient::EmbeddedMqttClient(const MqttConfig& config)
     : config_(config)
     , initialized_(false)
     , connected_(false)
+    , metrics_()
 {
     // 立即初始化
     const auto result = initialize(config);
@@ -308,6 +310,13 @@ Result<bool> EmbeddedMqttClient::connect() {
     }
 
     auto result = connectionManager_->connect();
+    const bool isReconnect = reconnectManager_ && reconnectManager_->isReconnecting();
+    
+    // 更新连接指标
+    if (config_.metrics.enableMetrics && config_.metrics.collectConnectionMetrics) {
+        updateConnectionMetrics(result.success, isReconnect);
+    }
+    
     if (result) {
         connected_.store(true);
 
@@ -330,6 +339,11 @@ Result<bool> EmbeddedMqttClient::connect() {
         }
 
         // 消息管理器会在需要时自动处理队列
+    } else {
+        // 连接失败，更新错误指标
+        if (config_.metrics.enableMetrics) {
+            updateErrorMetrics(result.error);
+        }
     }
 
     return result;
@@ -361,11 +375,31 @@ Result<bool> EmbeddedMqttClient::disconnect(bool /* force */) {
     // 通过连接管理器断开
     if (connectionManager_) {
         auto result = connectionManager_->disconnect();
-        connected_.store(false);
+        if (result) {
+            connected_.store(false);
+            
+            // 更新连接指标
+            if (config_.metrics.enableMetrics && config_.metrics.collectConnectionMetrics) {
+                std::lock_guard metricsLock(metricsMutex_);
+                metrics_.connection.disconnections++;
+            }
+        } else {
+            // 断开失败，更新错误指标
+            if (config_.metrics.enableMetrics) {
+                updateErrorMetrics(result.error);
+            }
+        }
         return result;
     }
 
     connected_.store(false);
+    
+    // 更新连接指标
+    if (config_.metrics.enableMetrics && config_.metrics.collectConnectionMetrics) {
+        std::lock_guard metricsLock(metricsMutex_);
+        metrics_.connection.disconnections++;
+    }
+    
     return Result<bool>::Success(true);
 }
 
@@ -453,12 +487,34 @@ Result<bool> EmbeddedMqttClient::publish(std::string_view topic,
     if (config_.basic.version != "5.0") {
         // MQTT 3.1.1 不支持属性，忽略 properties 参数
         LOG_DEBUG("MQTT 3.1.1 不支持属性，忽略 properties 参数");
-        return messageManager_->publish(std::string(topic), std::string(payload), qos, retain);
+        auto result = messageManager_->publish(std::string(topic), std::string(payload), qos, retain);
+        
+        // 更新消息指标
+        if (config_.metrics.enableMetrics && config_.metrics.collectMessageMetrics) {
+            updateMessageMetrics(true, result.success, payload.size());
+        }
+        
+        if (!result.success && config_.metrics.enableMetrics) {
+            updateErrorMetrics(result.error);
+        }
+        
+        return result;
     }
 
     // MQTT 5.0：如果属性为空，使用普通发布方法（通过 MessageManager）
     if (properties.isEmpty()) {
-        return messageManager_->publish(std::string(topic), std::string(payload), qos, retain);
+        auto result = messageManager_->publish(std::string(topic), std::string(payload), qos, retain);
+        
+        // 更新消息指标
+        if (config_.metrics.enableMetrics && config_.metrics.collectMessageMetrics) {
+            updateMessageMetrics(true, result.success, payload.size());
+        }
+        
+        if (!result.success && config_.metrics.enableMetrics) {
+            updateErrorMetrics(result.error);
+        }
+        
+        return result;
     }
 
     // MQTT 5.0：有属性时，直接通过 adapter 发布（绕过 MessageManager）
@@ -478,12 +534,23 @@ Result<bool> EmbeddedMqttClient::publish(std::string_view topic,
 
     // 通过 adapter 发布（带属性）
     LOG_DEBUG("使用 MQTT 5.0 属性发布消息");
-    return wolfAdapter_->publish(topic, payload, properties, qos, retain);
+    auto result = wolfAdapter_->publish(topic, payload, properties, qos, retain);
+    
+    // 更新消息指标
+    if (config_.metrics.enableMetrics && config_.metrics.collectMessageMetrics) {
+        updateMessageMetrics(true, result.success, payload.size());
+    }
+    
+    if (!result.success && config_.metrics.enableMetrics) {
+        updateErrorMetrics(result.error);
+    }
+    
+    return result;
 }
 
 Result<bool> EmbeddedMqttClient::subscribe(const std::string_view topic,
                                           const MessageCallback &callback,
-                                          const QoS qos) const {
+                                          const QoS qos) {
     std::lock_guard lock(mutex_);
 
     if (!initialized_.load()) {
@@ -498,10 +565,21 @@ Result<bool> EmbeddedMqttClient::subscribe(const std::string_view topic,
                      "订阅管理器未初始化"));
     }
 
-    return subscriptionManager_->subscribe(topic, callback, qos);
+    auto result = subscriptionManager_->subscribe(topic, callback, qos);
+    
+    // 更新订阅指标
+    if (config_.metrics.enableMetrics) {
+        updateSubscriptionMetrics(true, result.success);
+    }
+    
+    if (!result.success && config_.metrics.enableMetrics) {
+        updateErrorMetrics(result.error);
+    }
+    
+    return result;
 }
 
-Result<bool> EmbeddedMqttClient::unsubscribe(const std::string_view topic) const {
+Result<bool> EmbeddedMqttClient::unsubscribe(const std::string_view topic) {
     std::lock_guard lock(mutex_);
 
     if (!initialized_.load()) {
@@ -516,7 +594,19 @@ Result<bool> EmbeddedMqttClient::unsubscribe(const std::string_view topic) const
                      "订阅管理器未初始化"));
     }
 
-    return subscriptionManager_->unsubscribe(topic);
+    auto result = subscriptionManager_->unsubscribe(topic);
+    
+    // 更新订阅指标
+    if (config_.metrics.enableMetrics && result.success) {
+        std::lock_guard metricsLock(metricsMutex_);
+        metrics_.subscription.unsubscriptions++;
+    }
+    
+    if (!result.success && config_.metrics.enableMetrics) {
+        updateErrorMetrics(result.error);
+    }
+    
+    return result;
 }
 
 std::vector<std::string> EmbeddedMqttClient::getSubscribedTopics() const {
@@ -770,6 +860,104 @@ void EmbeddedMqttClient::setupCallbacks() {
             }
         });
     }
+}
+
+// ========== 监控指标方法实现 ==========
+
+const MqttMetrics& EmbeddedMqttClient::getMetrics() const noexcept {
+    std::lock_guard lock(metricsMutex_);
+    
+    // 更新性能指标（实时数据）
+    if (config_.metrics.enableMetrics && config_.metrics.collectPerformanceMetrics) {
+        // 更新队列大小
+        if (messageManager_) {
+            // 注意：MessageManager 需要提供获取队列大小的方法
+            // 这里暂时不更新，等待 MessageManager 提供接口
+        }
+        
+        // 更新活跃线程数（可以通过 thread::hardware_concurrency 获取，但这里统计的是实际使用的线程）
+        // 暂时不实现，需要维护线程列表
+    }
+    
+    return metrics_;
+}
+
+void EmbeddedMqttClient::resetMetrics() {
+    std::lock_guard lock(metricsMutex_);
+    metrics_.reset();
+}
+
+void EmbeddedMqttClient::updateCustomMetric(const std::string& key, int value) {
+    if (!config_.metrics.enableMetrics) {
+        return;
+    }
+    
+    std::lock_guard lock(metricsMutex_);
+    metrics_.customMetrics[key] = value;
+}
+
+void EmbeddedMqttClient::updateConnectionMetrics(bool success, bool isReconnect) {
+    if (!config_.metrics.enableMetrics || !config_.metrics.collectConnectionMetrics) {
+        return;
+    }
+    
+    std::lock_guard lock(metricsMutex_);
+    metrics_.connection.totalConnections++;
+    
+    if (success) {
+        metrics_.connection.successfulConnections++;
+        if (isReconnect) {
+            metrics_.connection.reconnections++;
+        }
+    } else {
+        metrics_.connection.failedConnections++;
+    }
+}
+
+void EmbeddedMqttClient::updateMessageMetrics(bool sent, bool success, size_t bytes) {
+    if (!config_.metrics.enableMetrics || !config_.metrics.collectMessageMetrics) {
+        return;
+    }
+    
+    std::lock_guard lock(metricsMutex_);
+    
+    if (sent) {
+        metrics_.message.messagesSent++;
+        metrics_.message.bytesSent += static_cast<int>(bytes);
+        if (!success) {
+            metrics_.message.messagesFailed++;
+        }
+    } else {
+        metrics_.message.messagesReceived++;
+        metrics_.message.bytesReceived += static_cast<int>(bytes);
+    }
+}
+
+void EmbeddedMqttClient::updateSubscriptionMetrics(bool subscribe, bool success) {
+    if (!config_.metrics.enableMetrics) {
+        return;
+    }
+    
+    std::lock_guard lock(metricsMutex_);
+    
+    if (subscribe) {
+        metrics_.subscription.subscriptions++;
+        if (!success) {
+            metrics_.subscription.subscriptionFailures++;
+        }
+    } else {
+        metrics_.subscription.unsubscriptions++;
+    }
+}
+
+void EmbeddedMqttClient::updateErrorMetrics(const MqttError& error) {
+    if (!config_.metrics.enableMetrics) {
+        return;
+    }
+    
+    std::lock_guard lock(metricsMutex_);
+    metrics_.error.totalErrors++;
+    metrics_.error.errorCounts[error.code]++;
 }
 
 } // namespace mqtt_client

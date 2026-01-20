@@ -12,6 +12,7 @@
 #include "mqtt_client/core/result.h"
 #include "mqtt_client/core/error.h"
 #include "mqtt_client/config/config.h"
+#include "mqtt_client/metrics/metrics.h"
 #include <string>
 #include <string_view>
 #include <vector>
@@ -219,7 +220,7 @@ public:
      */
     [[nodiscard]] Result<bool> subscribe(std::string_view topic,
                                          const MessageCallback &callback,
-                                         QoS qos = QoS::QOS_0) const;
+                                         QoS qos = QoS::QOS_0);
     
     /**
      * @brief 取消订阅
@@ -227,7 +228,7 @@ public:
      * @param topic 主题名称
      * @return Result<bool> 取消订阅结果
      */
-    [[nodiscard]] Result<bool> unsubscribe(std::string_view topic) const;
+    [[nodiscard]] Result<bool> unsubscribe(std::string_view topic);
     
     /**
      * @brief 获取已订阅的主题列表
@@ -251,6 +252,28 @@ public:
      * @param callback 错误回调函数
      */
     void setErrorCallback(const ErrorCallback &callback);
+    
+    // ========== 监控指标 ==========
+    
+    /**
+     * @brief 获取监控指标
+     * 
+     * @return const MqttMetrics& 监控指标的常量引用
+     */
+    [[nodiscard]] const MqttMetrics& getMetrics() const noexcept;
+    
+    /**
+     * @brief 重置监控指标
+     */
+    void resetMetrics();
+    
+    /**
+     * @brief 更新自定义指标
+     * 
+     * @param key 指标键名
+     * @param value 指标值
+     */
+    void updateCustomMetric(const std::string& key, int value);
 
 private:
     /**
@@ -289,12 +312,36 @@ private:
     std::atomic<bool> initialized_;
     std::atomic<bool> connected_;
     
+    // 监控指标
+    mutable MqttMetrics metrics_;
+    mutable std::mutex metricsMutex_;  // 指标专用锁，避免与主锁竞争
+    
     // 回调函数
     ConnectionCallback connectionCallback_;
     ErrorCallback errorCallback_;
     
     // 线程安全
     mutable std::mutex mutex_;
+    
+    /**
+     * @brief 更新连接指标（内部方法）
+     */
+    void updateConnectionMetrics(bool success, bool isReconnect = false);
+    
+    /**
+     * @brief 更新消息指标（内部方法）
+     */
+    void updateMessageMetrics(bool sent, bool success, size_t bytes);
+    
+    /**
+     * @brief 更新订阅指标（内部方法）
+     */
+    void updateSubscriptionMetrics(bool subscribe, bool success);
+    
+    /**
+     * @brief 更新错误指标（内部方法）
+     */
+    void updateErrorMetrics(const MqttError& error);
 };
 
 } // namespace mqtt_client

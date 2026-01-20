@@ -143,12 +143,9 @@ sudo apt-get install build-essential cmake libwolfssl-dev
 1. 构建所有依赖和项目
 2. 仅构建 wolfMQTT
 3. 仅构建项目
-4. 运行单元测试
-5. 运行集成测试
-6. 运行所有测试
-7. 生成测试报告（含代码覆盖率）
-8. 清理所有构建文件
-9. 退出
+4. 运行所有测试 (含覆盖率报告)
+5. 清理所有构建文件
+6. 退出
 
 ### macOS Universal Binary
 

@@ -280,6 +280,7 @@ set(SOURCES
     src/persistence/storage_engine.cpp
     src/persistence/persistence_manager.cpp
     src/persistence/idempotency_manager.cpp
+    src/metrics/metrics.cpp
     src/embedded_mqtt_client.cpp
 )
 
