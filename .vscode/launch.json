@@ -1,0 +1,32 @@
+{
+    // 使用 IntelliSense 了解相关属性。 
+    // 悬停以查看现有属性的描述。
+    // 欲了解更多信息，请访问: https://go.microsoft.com/fwlink/?linkid=830387
+    "version": "0.2.0",
+    "configurations": [
+        {
+            "type": "lldb-dap",
+            "request": "launch",
+            "name": "Debug test_mqtt311_tcp_tls",
+            "program": "${workspaceFolder}/build/bin/test_mqtt311_tcp_tls",
+            "args": [
+                // 可以根据需要指定 gtest 过滤，例如：
+                // "--gtest_filter=YourTestSuite.YourTestCase"
+            ],
+            "env": {},
+            "cwd": "${workspaceFolder}/build"
+        },
+        {
+            "type": "lldb-dap",
+            "request": "launch",
+            "name": "Debug test_mqtt5_tcp_tls",
+            "program": "${workspaceFolder}/build/bin/test_mqtt5_tcp_tls",
+            "args": [
+                // 可以根据需要指定 gtest 过滤，例如：
+                // "--gtest_filter=YourTestSuite.YourTestCase"
+            ],
+            "env": {},
+            "cwd": "${workspaceFolder}/build"
+        }
+    ]
+}

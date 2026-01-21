@@ -40,7 +40,6 @@ _deps/
 
 # IDE文件
 .idea/
-.vscode/
 *.swp
 *.swo
 *~

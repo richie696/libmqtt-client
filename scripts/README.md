@@ -8,10 +8,12 @@
 scripts/
 ├── unix/              # Linux/macOS 脚本
 │   ├── init.sh        # 初始化脚本（首次使用必运行）⭐
-│   └── build.sh       # Bash 构建脚本
+│   ├── build.sh       # Bash 构建脚本
+│   └── build_test_debug.sh  # Debug 模式测试构建脚本
 ├── windows/           # Windows 脚本
 │   ├── init.ps1       # 初始化脚本（首次使用必运行）⭐
-│   └── build.ps1       # PowerShell 构建脚本
+│   ├── build.ps1      # PowerShell 构建脚本
+│   └── build_test_debug.ps1  # Debug 模式测试构建脚本
 ├── generate_api_doc.py # API 文档生成脚本
 └── README.md          # 本文件
 ```
@@ -22,11 +24,13 @@ scripts/
 
 - **init.sh** - 初始化脚本（首次使用必运行）⭐
 - **build.sh** - Bash 构建脚本
+- **build_test_debug.sh** - Debug 模式测试构建脚本（快速构建测试程序）
 
 ### Windows 脚本
 
 - **init.ps1** - 初始化脚本（首次使用必运行）⭐
 - **build.ps1** - PowerShell 构建脚本
+- **build_test_debug.ps1** - Debug 模式测试构建脚本（快速构建测试程序）
 
 ### 工具脚本
 
@@ -62,6 +66,30 @@ scripts/
 # Windows - 使用 PowerShell 脚本
 .\scripts\windows\build.ps1
 ```
+
+### 快速构建 Debug 测试程序
+
+**用于调试集成测试的快捷脚本：**
+
+```bash
+# Linux/macOS - 构建 test_mqtt311_tcp_tls
+./scripts/unix/build_test_debug.sh
+
+# 构建其他测试目标
+./scripts/unix/build_test_debug.sh -t test_mqtt5_tcp_tls
+
+# Windows - 使用 PowerShell
+.\scripts\windows\build_test_debug.ps1
+
+# 构建其他测试目标
+.\scripts\windows\build_test_debug.ps1 -Target test_mqtt5_tcp_tls
+```
+
+**功能**:
+- ✅ 自动使用 Debug 模式构建
+- ✅ 自动启用测试和集成测试
+- ✅ 只构建指定的测试目标（默认：`test_mqtt311_tcp_tls`）
+- ✅ 快速构建，适合调试场景
 
 ## 主要功能
 
