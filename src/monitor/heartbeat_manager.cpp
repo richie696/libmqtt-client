@@ -7,6 +7,7 @@
 #include "mqtt_client/message/message_manager.h"
 #include "mqtt_client/logger/logger_interface.h"
 #include <fmt/core.h>
+#include <algorithm>
 #include <chrono>
 #include <ctime>
 
@@ -18,7 +19,7 @@ HeartbeatManager::HeartbeatManager(MqttMessageManager& messageManager,
                                   int interval,
                                   const std::string& topic)
     : messageManager_(messageManager)
-    , interval_(interval)
+    , interval_(std::max(1, interval))
     , topic_(topic.empty() ? "heartbeat" : topic)
     , running_(false)
 {
@@ -38,13 +39,11 @@ void HeartbeatManager::start() {
 }
 
 void HeartbeatManager::stop() {
-    if (!running_.load()) {
-        return;
-    }
-    
     running_.store(false);
-    
-    if (heartbeatThread_.joinable()) {
+    waitCv_.notify_all();
+
+    if (heartbeatThread_.joinable() &&
+        heartbeatThread_.get_id() != std::this_thread::get_id()) {
         heartbeatThread_.join();
     }
 }
@@ -67,7 +66,13 @@ bool HeartbeatManager::sendHeartbeat() {
     
     // 格式化时间戳（使用 fmt::format）
     char timeStr[32];
-    std::strftime(timeStr, sizeof(timeStr), "%Y-%m-%d %H:%M:%S", std::localtime(&timeT));
+    std::tm localTime{};
+#ifdef _WIN32
+    localtime_s(&localTime, &timeT);
+#else
+    localtime_r(&timeT, &localTime);
+#endif
+    std::strftime(timeStr, sizeof(timeStr), "%Y-%m-%d %H:%M:%S", &localTime);
     std::string payload = fmt::format("{}.{:03d}", timeStr, ms.count());
     
     auto startTime = std::chrono::steady_clock::now();
@@ -93,10 +98,12 @@ bool HeartbeatManager::sendHeartbeat() {
 
 void HeartbeatManager::heartbeatThread() {
     while (running_.load()) {
-        sendHeartbeat();
+        (void)sendHeartbeat();
         
-        // 等待下次心跳
-        std::this_thread::sleep_for(std::chrono::seconds{interval_});
+        std::unique_lock waitLock(waitMutex_);
+        waitCv_.wait_for(waitLock, std::chrono::seconds{interval_}, [this] {
+            return !running_.load();
+        });
     }
 }
 

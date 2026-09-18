@@ -39,13 +39,7 @@ NetworkMonitor::NetworkMonitor(std::string  host, const int port, const int chec
 }
 
 NetworkMonitor::~NetworkMonitor() {
-    // 先停止运行标志，让线程退出
-    running_.store(false);
-    
-    // 等待线程退出（不获取mutex，避免死锁）
-    if (monitorThread_.joinable()) {
-        monitorThread_.join();
-    }
+    stop();
 }
 
 void NetworkMonitor::start() {
@@ -58,12 +52,7 @@ void NetworkMonitor::start() {
 }
 
 void NetworkMonitor::stop() {
-    // 先设置停止标志，让线程自然退出
-    if (!running_.exchange(false)) {
-        return;  // 已经停止
-    }
-    
-    // 等待线程退出（不获取mutex，避免死锁）
+    running_.store(false);
     if (monitorThread_.joinable()) {
         monitorThread_.join();
     }
@@ -83,40 +72,23 @@ NetworkMonitor::NetworkStats NetworkMonitor::getStats() const {
 }
 
 NetworkQuality NetworkMonitor::getQuality() const {
-    // 使用try_lock避免在析构时死锁
-    const std::unique_lock lock(mutex_, std::try_to_lock);
-    if (lock.owns_lock()) {
-        return calculateQuality(stats_);
-    }
-    // 无法获取锁，返回默认值
-    return NetworkQuality::POOR;
+    const std::lock_guard lock(mutex_);
+    return calculateQuality(stats_);
 }
 
 void NetworkMonitor::setOnNetworkRecovered(const std::function<void()> &callback) {
-    // 使用try_lock避免在析构时死锁
-    const std::unique_lock lock(mutex_, std::try_to_lock);
-    if (lock.owns_lock()) {
-        onNetworkRecovered_ = callback;
-    }
-    // 如果无法获取锁，跳过设置（避免死锁）
+    const std::lock_guard lock(mutex_);
+    onNetworkRecovered_ = callback;
 }
 
 void NetworkMonitor::setOnNetworkLost(const std::function<void()> &callback) {
-    // 使用try_lock避免在析构时死锁
-    const std::unique_lock lock(mutex_, std::try_to_lock);
-    if (lock.owns_lock()) {
-        onNetworkLost_ = callback;
-    }
-    // 如果无法获取锁，跳过设置（避免死锁）
+    const std::lock_guard lock(mutex_);
+    onNetworkLost_ = callback;
 }
 
 void NetworkMonitor::setOnQualityChanged(const std::function<void(NetworkQuality)> &callback) {
-    // 使用try_lock避免在析构时死锁
-    const std::unique_lock lock(mutex_, std::try_to_lock);
-    if (lock.owns_lock()) {
-        onQualityChanged_ = callback;
-    }
-    // 如果无法获取锁，跳过设置（避免死锁）
+    const std::lock_guard lock(mutex_);
+    onQualityChanged_ = callback;
 }
 
 void NetworkMonitor::monitorThread() {
@@ -128,42 +100,44 @@ void NetworkMonitor::monitorThread() {
         
         networkAvailable_.store(isAvailable);
         
-        // 使用try_lock避免死锁（在析构时可能无法获取锁）
-        std::unique_lock lock(mutex_, std::try_to_lock);
-        if (lock.owns_lock()) {
+        std::function<void()> stateCallback;
+        std::function<void(NetworkQuality)> qualityCallback;
+        NetworkQuality currentQuality = lastQuality_;
+        {
+            const std::lock_guard lock(mutex_);
             // 检测网络状态变化
             if (!wasAvailable && isAvailable) {
-                // 网络恢复
                 LOG_INFO("网络已恢复");
-                if (onNetworkRecovered_) {
-                    try {
-                        onNetworkRecovered_();
-                    } catch (const std::exception& e) {
-                        LOG_ERROR(fmt::format("网络恢复回调执行失败: {}", e.what()));
-                    }
-                }
+                stateCallback = onNetworkRecovered_;
             } else if (wasAvailable && !isAvailable) {
-                // 网络丢失
                 LOG_WARN("网络已丢失");
-                if (onNetworkLost_) {
-                    try {
-                        onNetworkLost_();
-                    } catch (const std::exception& e) {
-                        LOG_ERROR(fmt::format("网络丢失回调执行失败: {}", e.what()));
-                    }
-                }
+                stateCallback = onNetworkLost_;
             }
             
             // 检测网络质量变化
-            if (const NetworkQuality currentQuality = calculateQuality(stats_); currentQuality != lastQuality_) {
+            currentQuality = calculateQuality(stats_);
+            if (currentQuality != lastQuality_) {
                 lastQuality_ = currentQuality;
-                if (onQualityChanged_) {
-                    try {
-                        onQualityChanged_(currentQuality);
-                    } catch (const std::exception& e) {
-                        LOG_ERROR(fmt::format("网络质量变化回调执行失败: {}", e.what()));
-                    }
-                }
+                qualityCallback = onQualityChanged_;
+            }
+        }
+
+        if (stateCallback) {
+            try {
+                stateCallback();
+            } catch (const std::exception& e) {
+                LOG_ERROR(fmt::format("网络状态回调执行失败: {}", e.what()));
+            } catch (...) {
+                LOG_ERROR("网络状态回调执行失败: 未知异常");
+            }
+        }
+        if (qualityCallback) {
+            try {
+                qualityCallback(currentQuality);
+            } catch (const std::exception& e) {
+                LOG_ERROR(fmt::format("网络质量回调执行失败: {}", e.what()));
+            } catch (...) {
+                LOG_ERROR("网络质量回调执行失败: 未知异常");
             }
         }
         
@@ -218,13 +192,12 @@ bool NetworkMonitor::checkNetworkConnectivity() {
         addrinfo* result = nullptr;
         const int rc = getaddrinfo(host_.c_str(), nullptr, &hints, &result);
         if (rc != 0 || result == nullptr) {
-            LOG_ERROR(fmt::format("DNS解析失败: {} ({})", host_, 
-                #ifdef _WIN32
-                    gai_strerrorA(rc)
-                #else
-                    gai_strerror(rc)
-                #endif
-            ));
+#ifdef _WIN32
+            const char* dnsError = gai_strerrorA(rc);
+#else
+            const char* dnsError = gai_strerror(rc);
+#endif
+            LOG_ERROR(fmt::format("DNS解析失败: {} ({})", host_, dnsError));
             close(sock);
 #ifdef _WIN32
             WSACleanup();
@@ -265,12 +238,8 @@ bool NetworkMonitor::checkNetworkConnectivity() {
 
 long NetworkMonitor::measureLatency() const {
     // 直接返回统计信息中的延迟（延迟在 checkNetworkConnectivity 中已测量并更新）
-    // 使用try_lock避免在析构时死锁
-    const std::unique_lock lock(mutex_, std::try_to_lock);
-    if (lock.owns_lock()) {
-        return stats_.latency;
-    }
-    return -1;  // 无法获取锁，返回默认值
+    const std::lock_guard lock(mutex_);
+    return stats_.latency;
 }
 
 void NetworkMonitor::updateStats(const bool available, const long latency) {

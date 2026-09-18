@@ -13,40 +13,19 @@
 namespace mqtt_client {
 
 MqttSubscriptionManager::MqttSubscriptionManager(MqttConnectionManager& connectionManager,
-                                                 const MqttConfig& config)
+                                                 [[maybe_unused]] const MqttConfig& config)
     : connectionManager_(connectionManager)
-    , config_(config)
 {
 }
 
 MqttSubscriptionManager::~MqttSubscriptionManager() {
-    // 在析构函数中，使用try_to_lock避免阻塞
-    // 避免在对象销毁时出现mutex问题
-    std::unique_lock lock(mutex_, std::try_to_lock);
-    if (lock.owns_lock()) {
-        // 如果已连接，尝试取消所有订阅（可能失败，但不影响析构）
-        if (connectionManager_.isConnected()) {
-            try {
-                // 尝试取消所有订阅，但不等待结果
-                for (const auto& [topic, _] : subscriptions_) {
-                    connectionManager_.getAdapter()->unsubscribe(topic);
-                }
-            } catch (...) {
-                // 忽略取消订阅异常，确保析构能完成
-            }
-        }
-        subscriptions_.clear();
-    } else {
-        // 如果无法获取锁，直接清空（可能不安全，但确保析构能完成）
-        subscriptions_.clear();
-    }
+    std::unique_lock lock(mutex_);
+    subscriptions_.clear();
 }
 
 Result<bool> MqttSubscriptionManager::subscribe(std::string_view topic,
                                                 MessageCallback callback,
                                                 QoS qos) {
-    std::unique_lock lock(mutex_);  // 写操作，使用 unique_lock
-    
     // 验证主题
     if (topic.empty() || topic.length() > 65535) {
         return Result<bool>::Failure(
@@ -61,28 +40,18 @@ Result<bool> MqttSubscriptionManager::subscribe(std::string_view topic,
                      "主题过滤器无效: " + std::string(topic)));
     }
     
-    // 检查是否已订阅
-    auto it = subscriptions_.find(std::string(topic));
-    if (it != subscriptions_.end()) {
-        // 已订阅，更新回调和QoS
-        LOG_DEBUG(fmt::format("主题已订阅，更新回调: {}", topic));
-        it->second.callback = callback;
-        it->second.qos = qos;
-        return Result<bool>::Success(true);
-    }
-    
     // 检查连接状态
     if (!connectionManager_.isConnected()) {
-        // 未连接，保存订阅信息，连接后自动订阅
         Subscription sub;
         sub.topic = std::string(topic);
         sub.callback = callback;
         sub.qos = qos;
         sub.subscribedTime = std::time(nullptr);
-        
-        subscriptions_[sub.topic] = sub;
-        
-        LOG_DEBUG(fmt::format("未连接，保存订阅信息: {}", sub.topic));
+
+        const std::string savedTopic = sub.topic;
+        std::unique_lock lock(mutex_);
+        subscriptions_[sub.topic] = std::move(sub);
+        LOG_DEBUG(fmt::format("未连接，保存订阅信息: {}", savedTopic));
         return Result<bool>::Success(true);
     }
     
@@ -94,7 +63,9 @@ Result<bool> MqttSubscriptionManager::subscribe(std::string_view topic,
                      "适配器未初始化"));
     }
     
-    auto result = adapter->subscribe(topic, qos);
+    // 底层操作期间不能持有订阅锁。wolfMQTT等待SUBACK时可能同时收到
+    // 业务消息，并在同一线程回调dispatchMessage。
+    const auto result = adapter->subscribe(topic, qos);
     if (!result) {
         return result;
     }
@@ -106,7 +77,10 @@ Result<bool> MqttSubscriptionManager::subscribe(std::string_view topic,
     sub.qos = qos;
     sub.subscribedTime = std::time(nullptr);
     
-    subscriptions_[sub.topic] = sub;
+    {
+        std::unique_lock lock(mutex_);
+        subscriptions_[sub.topic] = sub;
+    }
     
     LOG_DEBUG(fmt::format("订阅成功: {} (QoS: {})", sub.topic, static_cast<int>(qos)));
     
@@ -114,15 +88,14 @@ Result<bool> MqttSubscriptionManager::subscribe(std::string_view topic,
 }
 
 Result<bool> MqttSubscriptionManager::unsubscribe(std::string_view topic) {
-    std::unique_lock lock(mutex_);  // 写操作，使用 unique_lock
-    
-    // 检查是否已订阅
-    auto it = subscriptions_.find(std::string(topic));
-    if (it == subscriptions_.end()) {
-        LOG_DEBUG(fmt::format("主题未订阅: {}", topic));
-        return Result<bool>::Success(true);  // 未订阅也算成功
+    {
+        std::shared_lock lock(mutex_);
+        if (subscriptions_.find(std::string(topic)) == subscriptions_.end()) {
+            LOG_DEBUG(fmt::format("主题未订阅: {}", topic));
+            return Result<bool>::Success(true);
+        }
     }
-    
+
     // 如果已连接，通过适配器取消订阅
     if (connectionManager_.isConnected()) {
         auto* adapter = connectionManager_.getAdapter();
@@ -130,13 +103,16 @@ Result<bool> MqttSubscriptionManager::unsubscribe(std::string_view topic) {
             auto result = adapter->unsubscribe(topic);
             if (!result) {
                 LOG_WARN(fmt::format("取消订阅失败: {}", topic));
-                // 即使取消订阅失败，也从缓存中移除
+                return result;
             }
         }
     }
-    
+
     // 从缓存中移除
-    subscriptions_.erase(it);
+    {
+        std::unique_lock lock(mutex_);
+        subscriptions_.erase(std::string(topic));
+    }
     
     LOG_DEBUG(fmt::format("取消订阅成功: {}", topic));
     
@@ -144,27 +120,42 @@ Result<bool> MqttSubscriptionManager::unsubscribe(std::string_view topic) {
 }
 
 void MqttSubscriptionManager::unsubscribeAll() {
-    std::unique_lock lock(mutex_);  // 写操作，使用 unique_lock
-    
+    std::vector<std::string> topics;
+    {
+        std::shared_lock lock(mutex_);
+        topics.reserve(subscriptions_.size());
+        for (const auto& [topic, sub] : subscriptions_) {
+            topics.push_back(topic);
+        }
+    }
+
+    std::vector<std::string> succeeded;
     // 如果已连接，取消所有订阅
     if (connectionManager_.isConnected()) {
         auto* adapter = connectionManager_.getAdapter();
         if (adapter) {
-            for (const auto& [topic, sub] : subscriptions_) {
-                adapter->unsubscribe(topic);
+            for (const auto& topic : topics) {
+                if (auto result = adapter->unsubscribe(topic); result) {
+                    succeeded.push_back(topic);
+                } else {
+                    LOG_WARN(fmt::format("取消订阅失败: {}", topic));
+                }
             }
         }
+    } else {
+        succeeded = topics;
     }
-    
-    // 清空缓存
-    subscriptions_.clear();
-    
+
+    {
+        std::unique_lock lock(mutex_);
+        for (const auto& topic : succeeded) {
+            subscriptions_.erase(topic);
+        }
+    }
     LOG_DEBUG("已取消所有订阅");
 }
 
 Result<bool> MqttSubscriptionManager::resubscribeAll() {
-    std::unique_lock lock(mutex_);  // 写操作，使用 unique_lock
-    
     if (!connectionManager_.isConnected()) {
         return Result<bool>::Failure(
             MqttError(MqttErrorCode::NOT_CONNECTED,
@@ -178,50 +169,60 @@ Result<bool> MqttSubscriptionManager::resubscribeAll() {
                      "适配器未初始化"));
     }
     
-    // 重新订阅所有主题
-    for (auto& [topic, sub] : subscriptions_) {
-        auto result = adapter->subscribe(topic, sub.qos);
+    std::vector<std::pair<std::string, QoS>> subscriptions;
+    {
+        std::shared_lock lock(mutex_);
+        subscriptions.reserve(subscriptions_.size());
+        for (const auto& [topic, sub] : subscriptions_) {
+            subscriptions.emplace_back(topic, sub.qos);
+        }
+    }
+
+    bool allSucceeded = true;
+    for (const auto& subscription : subscriptions) {
+        const auto& topic = subscription.first;
+        const auto qos = subscription.second;
+        auto result = adapter->subscribe(topic, qos);
         if (!result) {
             LOG_WARN(fmt::format("恢复订阅失败: {}", topic));
-            // 继续处理其他订阅
+            allSucceeded = false;
         } else {
-            sub.subscribedTime = std::time(nullptr);
+            std::unique_lock lock(mutex_);
+            if (auto it = subscriptions_.find(topic); it != subscriptions_.end()) {
+                it->second.subscribedTime = std::time(nullptr);
+            }
             LOG_DEBUG(fmt::format("恢复订阅成功: {}", topic));
         }
     }
-    
+
+    if (!allSucceeded) {
+        return Result<bool>::Failure(
+            MqttError(MqttErrorCode::SUBSCRIBE_FAILED, "部分主题恢复订阅失败"));
+    }
     return Result<bool>::Success(true);
 }
 
 void MqttSubscriptionManager::dispatchMessage(std::string_view topic,
                                              std::string_view payload,
                                              const MqttProperties& properties) {
-    std::shared_lock lock(mutex_);  // 读操作，使用 shared_lock（允许多个读操作并发）
-    
-    // 1. 精确匹配
-    auto it = subscriptions_.find(std::string(topic));
-    if (it != subscriptions_.end()) {
-        if (it->second.callback) {
-            try {
-                it->second.callback(topic, payload, properties);
-            } catch (const std::exception& e) {
-                LOG_ERROR(fmt::format("消息回调执行失败: {}", e.what()));
+    std::vector<MessageCallback> callbacks;
+    {
+        std::shared_lock lock(mutex_);
+
+        for (const auto& [filter, sub] : subscriptions_) {
+            if (topicMatches(filter, topic) && sub.callback) {
+                callbacks.push_back(sub.callback);
             }
         }
-        return;
     }
-    
-    // 2. 通配符匹配
-    for (const auto& [filter, sub] : subscriptions_) {
-        if (topicMatches(filter, topic)) {
-            if (sub.callback) {
-                try {
-                    sub.callback(topic, payload, properties);
-                } catch (const std::exception& e) {
-                    LOG_ERROR(fmt::format("消息回调执行失败: {}", e.what()));
-                }
-            }
-            // 注意：可能有多个匹配，继续查找所有匹配的订阅
+
+    for (const auto& callback : callbacks) {
+        try {
+            callback(topic, payload, properties);
+        } catch (const std::exception& e) {
+            LOG_ERROR(fmt::format("消息回调执行失败: {}", e.what()));
+        } catch (...) {
+            LOG_ERROR("消息回调执行失败: 未知异常");
         }
     }
 }
@@ -232,12 +233,7 @@ bool MqttSubscriptionManager::isSubscribed(std::string_view topic) const {
 }
 
 std::vector<std::string> MqttSubscriptionManager::getSubscribedTopics() const {
-    // 读操作，使用 shared_lock（try_to_lock 避免在析构时阻塞）
-    std::shared_lock lock(mutex_, std::try_to_lock);
-    if (!lock.owns_lock()) {
-        // 如果无法获取锁，返回空列表（避免阻塞）
-        return std::vector<std::string>();
-    }
+    std::shared_lock lock(mutex_);
     
     std::vector<std::string> topics;
     topics.reserve(subscriptions_.size());
@@ -250,13 +246,8 @@ std::vector<std::string> MqttSubscriptionManager::getSubscribedTopics() const {
 }
 
 size_t MqttSubscriptionManager::getSubscriptionCount() const {
-    // 读操作，使用 shared_lock（try_to_lock 避免在析构时阻塞）
-    std::shared_lock lock(mutex_, std::try_to_lock);
-    if (lock.owns_lock()) {
-        return subscriptions_.size();
-    }
-    // 如果无法获取锁，返回0（避免阻塞）
-    return 0;
+    std::shared_lock lock(mutex_);
+    return subscriptions_.size();
 }
 
 Result<bool> MqttSubscriptionManager::saveSubscription(std::string_view topic,

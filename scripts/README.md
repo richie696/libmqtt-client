@@ -1,365 +1,70 @@
-# 构建脚本说明
+# 构建脚本
 
-本目录包含跨平台构建脚本，支持 Linux、macOS 和 Windows。
+本目录提供 Linux/macOS 与 Windows 的初始化和构建入口。当前库面向桌面系统及资源较充足的嵌入式 Linux；wolfMQTT 与 wolfSSL 都以固定版本 Submodule 随主工程构建。
 
-## 📁 目录结构
+## Linux / macOS
 
-```
-scripts/
-├── unix/              # Linux/macOS 脚本
-│   ├── init.sh        # 初始化脚本（首次使用必运行）⭐
-│   ├── build.sh       # Bash 构建脚本
-│   └── build_test_debug.sh  # Debug 模式测试构建脚本
-├── windows/           # Windows 脚本
-│   ├── init.ps1       # 初始化脚本（首次使用必运行）⭐
-│   ├── build.ps1      # PowerShell 构建脚本
-│   └── build_test_debug.ps1  # Debug 模式测试构建脚本
-├── generate_api_doc.py # API 文档生成脚本
-└── README.md          # 本文件
-```
-
-## 脚本列表
-
-### Unix 脚本 (Linux/macOS)
-
-- **init.sh** - 初始化脚本（首次使用必运行）⭐
-- **build.sh** - Bash 构建脚本
-- **build_test_debug.sh** - Debug 模式测试构建脚本（快速构建测试程序）
-
-### Windows 脚本
-
-- **init.ps1** - 初始化脚本（首次使用必运行）⭐
-- **build.ps1** - PowerShell 构建脚本
-- **build_test_debug.ps1** - Debug 模式测试构建脚本（快速构建测试程序）
-
-### 工具脚本
-
-- **generate_api_doc.py** - API 文档生成脚本
-
-## 快速开始
-
-### 首次使用（必运行）
-
-**克隆项目后，首先运行初始化脚本：**
+首次克隆后初始化依赖：
 
 ```bash
-# Linux/macOS
-./scripts/unix/init.sh
-
-# Windows (PowerShell)
-.\scripts\windows\init.ps1
-
-# 初始化脚本会：
-# 1. 检查基本依赖（Git、CMake、编译器）
-# 2. 初始化 Git Submodules（下载 wolfMQTT）
-# 3. 构建 wolfMQTT 依赖库
-```
-
-### 构建项目
-
-**初始化完成后，使用构建脚本：**
-
-```bash
-# Linux/macOS - 使用 Bash 脚本
-./scripts/unix/build.sh --menu
-
-# Windows - 使用 PowerShell 脚本
-.\scripts\windows\build.ps1
-```
-
-### 快速构建 Debug 测试程序
-
-**用于调试集成测试的快捷脚本：**
-
-```bash
-# Linux/macOS - 构建 test_mqtt311_tcp_tls
-./scripts/unix/build_test_debug.sh
-
-# 构建其他测试目标
-./scripts/unix/build_test_debug.sh -t test_mqtt5_tcp_tls
-
-# Windows - 使用 PowerShell
-.\scripts\windows\build_test_debug.ps1
-
-# 构建其他测试目标
-.\scripts\windows\build_test_debug.ps1 -Target test_mqtt5_tcp_tls
-```
-
-**功能**:
-- ✅ 自动使用 Debug 模式构建
-- ✅ 自动启用测试和集成测试
-- ✅ 只构建指定的测试目标（默认：`test_mqtt311_tcp_tls`）
-- ✅ 快速构建，适合调试场景
-
-## 主要功能
-
-### 1. 初始化脚本 (unix/init.sh) ⭐ 首次使用必运行
-
-**功能**:
-- ✅ 检查基本依赖（Git、CMake、编译器）
-- ✅ 初始化 Git Submodules（下载 wolfMQTT）
-- ✅ 构建 wolfMQTT 依赖库（如果需要）
-
-**使用场景**:
-- 首次克隆项目后
-- 更新了 Git Submodules 后
-- 需要重新构建依赖时
-
-**使用方法**:
-```bash
-# Linux/macOS
 ./scripts/unix/init.sh
 ```
 
-### 2. 依赖构建
-
-构建脚本会自动按顺序构建所有依赖：
-
-1. **wolfMQTT** - 启用 TLS/SSL 和 MQTT 5.0 支持（由 init.sh 或 build.sh 构建）
-2. **nlohmann/json** - Header-only 库（自动下载）
-3. **项目本身** - MQTT 客户端库
-
-### 3. 交互式菜单
-
-使用 `--menu` 选项显示交互式菜单：
-
-```
-========================================
-  构建菜单
-========================================
-
-1. 构建所有依赖和项目
-2. 仅构建 wolfMQTT
-3. 仅构建项目
-4. 运行所有测试（含覆盖率报告）
-5. 清理所有构建文件
-6. 退出
-```
-
-### 4. 测试支持
-
-运行测试时会**自动启用代码覆盖率并生成报告**，无需额外步骤。
-
-#### 运行测试
+默认 Release 构建：
 
 ```bash
-# Linux/macOS - 运行所有测试（自动启用覆盖率并生成报告）
-./scripts/unix/build.sh --test all
-
-# Windows
-.\scripts\windows\build.ps1 --test all
-```
-
-#### 测试报告
-
-测试报告会自动生成在 `build/TEST_REPORT.md`，包含：
-
-- 测试概览（通过的测试、失败的测试）
-- 代码覆盖率统计（自动启用）
-- 测试总结（通过率等）
-
-**注意**：运行测试时会自动启用代码覆盖率，覆盖率数据使用 `gcov` 生成，报告会包含在测试报告中。
-
-## 命令行选项
-
-### 基本选项
-
-```bash
--h, --help          显示帮助信息
--t, --type TYPE     构建类型 (Debug|Release|RelWithDebInfo|MinSizeRel)
--d, --dir DIR       构建目录（默认: build）
--c, --clean         清理构建目录
--j, --jobs N        并行编译任务数（默认: 自动检测）
--v, --verbose       显示详细输出
--i, --install       安装到系统
---menu              显示交互式菜单
-```
-
-### 测试选项
-
-```bash
---test TYPE         运行测试 (unit|integration|all)
-                    注意：运行测试时会自动启用代码覆盖率并生成报告
-                    推荐使用 --test all 运行所有测试
-```
-
-### macOS 特定选项
-
-```bash
---macos-arch ARCH   macOS架构 (x86_64|arm64|universal)
-```
-
-## 使用示例
-
-### 示例 1: 默认构建
-
-```bash
-# Linux/macOS
 ./scripts/unix/build.sh
+```
 
-# Windows
+常用选项：
+
+```bash
+# 清理指定构建目录后重新构建
+./scripts/unix/build.sh --clean
+
+# Debug、指定并行数
+./scripts/unix/build.sh --type Debug --jobs 8
+
+# 单元测试
+./scripts/unix/build.sh --test unit
+
+# 安装到指定前缀
+./scripts/unix/build.sh --prefix /opt/libmqtt-client
+
+# macOS Universal Binary
+./scripts/unix/build.sh --macos-arch universal
+```
+
+真实 EMQX 集成测试需要显式提供环境变量：
+
+```bash
+MQTT_TEST_HOST=127.0.0.1 \
+MQTT_TEST_TCP_PORT=1883 \
+MQTT_TEST_TLS_PORT=8883 \
+MQTT_TEST_CA_CERT=/path/to/ca.pem \
+MQTT_TEST_ENABLE_TLS=true \
+./scripts/unix/build.sh --test integration
+```
+
+支持的集成测试协议矩阵为 MQTT 3.1.1/5.0、TCP/TLS、QoS 0/1/2。
+
+## Windows
+
+在 PowerShell 中运行：
+
+```powershell
+.\scripts\windows\init.ps1
 .\scripts\windows\build.ps1
 ```
 
-### 示例 2: Debug 构建
+## 依赖管理
+
+- `third_party/wolfmqtt`: wolfMQTT 2.1.0
+- `third_party/wolfssl`: wolfSSL 5.9.2
+- fmt、nlohmann/json、yaml-cpp、GoogleTest: CMake FetchContent
+
+不需要单独安装或编译系统 wolfSSL。若 Submodule 缺失，可手动执行：
 
 ```bash
-# Linux/macOS
-./scripts/unix/build.sh -t Debug -c
-
-# Windows
-.\scripts\windows\build.ps1 -t Debug -c
+git submodule update --init --recursive
 ```
-
-### 示例 3: 运行测试并生成报告
-
-```bash
-# Linux/macOS
-./scripts/unix/build.sh --test all
-
-# Windows
-.\scripts\windows\build.ps1 --test all
-```
-
-### 示例 4: 仅构建 wolfMQTT
-
-```bash
-# Linux/macOS
-./scripts/unix/build.sh --menu
-# 然后选择选项 2
-
-# Windows
-.\scripts\windows\build.ps1 --menu
-# 然后选择选项 2
-```
-
-### 示例 5: 清理所有构建文件
-
-```bash
-# Linux/macOS
-./scripts/unix/build.sh --menu
-# 然后选择选项 5
-
-# Windows
-.\scripts\windows\build.ps1 --menu
-# 然后选择选项 5
-```
-
-## 构建流程
-
-### 1. wolfMQTT 构建
-
-构建脚本会：
-
-1. 检查 wolfMQTT 源码是否存在（`third_party/wolfmqtt`）
-2. 使用 CMake 配置 wolfMQTT，启用：
-   - TLS/SSL 支持 (`-DWOLFMQTT_TLS=yes`)
-   - MQTT 5.0 支持 (`-DWOLFMQTT_V5=yes`)
-3. 构建并安装到 `third_party/wolfmqtt/install`
-
-### 2. nlohmann/json
-
-nlohmann/json 是 header-only 库，CMake 会自动通过 FetchContent 下载。
-
-### 3. 项目构建
-
-构建脚本会：
-
-1. 配置 CMake，启用：
-   - JSON 支持 (`-DENABLE_JSON=ON`)
-   - 测试支持 (`-DENABLE_TESTING=ON`)
-   - wolfMQTT 支持 (`-DWOLFMQTT_ENABLED=ON`)
-2. 构建项目库和测试可执行文件
-
-## 构建产物
-
-构建完成后，所有目标文件位于 `build/` 目录：
-
-```
-build/
-├── lib/              # 库文件
-│   └── libmqtt_client-*.so (Linux)
-│   └── libmqtt_client-*.dylib (macOS)
-│   └── mqtt_client-*.dll (Windows)
-├── bin/              # 可执行文件
-│   └── test_*        # 测试可执行文件
-├── include/          # 头文件（安装时）
-└── TEST_REPORT.md    # 测试报告（如果运行了测试）
-```
-
-## 依赖要求
-
-### 必需依赖
-
-- **Git** - 用于管理 Git Submodules
-- **CMake** >= 3.15
-- **C++ 编译器** (GCC >= 7.0 或 Clang >= 5.0)
-- **构建工具** (make 或 ninja)
-
-### 可选依赖
-
-- **wolfSSL** - TLS/SSL 支持（推荐安装）
-  - macOS: `brew install wolfssl`
-  - Linux: 使用包管理器安装 `libwolfssl-dev`
-- **Python 3** - 用于运行 API 文档生成脚本（可选）
-
-## 故障排除
-
-### 问题 1: wolfMQTT 构建失败
-
-**症状**: 构建 wolfMQTT 时出错
-
-**解决方案**:
-1. 检查 wolfSSL 是否已安装
-2. 手动构建 wolfMQTT:
-   ```bash
-   cd third_party/wolfmqtt
-   mkdir -p build_cmake
-   cd build_cmake
-   cmake .. -DWOLFMQTT_TLS=yes -DWOLFMQTT_V5=yes
-   cmake --build .
-   cmake --install . --prefix ../install
-   ```
-
-### 问题 2: 测试失败
-
-**症状**: 运行测试时某些测试失败
-
-**解决方案**:
-1. 检查 MQTT 服务器配置（集成测试需要）
-2. 查看测试日志: `build/TEST_REPORT.md`
-3. 使用 `--verbose` 选项查看详细输出
-
-### 问题 3: 代码覆盖率未生成
-
-**症状**: 测试报告中没有覆盖率数据
-
-**解决方案**:
-1. 确保使用 `--test` 选项（会自动启用覆盖率）
-2. 检查 `gcov` 是否已安装
-3. 确保使用 GCC 或支持覆盖率的编译器
-
-## 平台说明
-
-### Linux 和 macOS
-
-- 使用相同的 Bash 脚本（`unix/` 目录）
-- 脚本自动检测平台并适配差异
-- 主要差异：包管理器路径（/opt/homebrew vs /usr/local）
-
-### Windows
-
-- 使用 PowerShell 脚本（`build.ps1`）
-- PowerShell 在 Windows 7+ 默认安装
-
-### 平台选择建议
-
-- **Linux/macOS**: 使用 `unix/build.sh`
-- **Windows**: 使用 `windows/build.ps1`
-- **CI/CD**: 根据运行平台选择对应的脚本
-
-## 更多信息
-
-- 项目文档: `docs/`
-- 架构设计: `docs/ARCHITECTURE.md`
-- API 接口: `docs/API_DESIGN.md`

@@ -100,13 +100,6 @@ private:
      */
     void updateStatsUnlocked(bool connected);
     
-    /**
-     * @brief 更新统计信息（内部获取mutex）
-     * 
-     * @param connected 是否连接
-     */
-    void updateStats(bool connected);
-    
     MqttConnectionManager& connectionManager_;  ///< 连接管理器
     int checkInterval_;                         ///< 检查间隔（秒）
     

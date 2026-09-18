@@ -13,25 +13,29 @@
 #include <iomanip>
 #include <chrono>
 #include <thread>
+#include <cstdint>
+#include <algorithm>
 
 using namespace std::chrono_literals;
 
-// 使用标准库的简单 SHA-256 实现
-// 注意：这是简化实现，仅用于测试。生产环境建议使用专业的加密库（如 OpenSSL）
-#include <functional>
-
 namespace {
-    // 简单的 SHA-256 实现（仅用于测试）
-    // 生产环境应该使用专业的加密库（如 OpenSSL）
-    void simple_sha256(const unsigned char* data, size_t len, unsigned char* hash) {
-        // 使用 std::hash 作为占位实现
-        constexpr std::hash<std::string> hasher;
-        const size_t hash_value = hasher(std::string(reinterpret_cast<const char*>(data), len));
-        std::memcpy(hash, &hash_value, std::min(sizeof(hash_value), size_t(32)));
-        // 填充剩余部分
-        if (sizeof(hash_value) < 32) {
-            std::memset(hash + sizeof(hash_value), 0, 32 - sizeof(hash_value));
+    constexpr std::uint64_t kFnvPrime = 1099511628211ULL;
+
+    void hashBytes(std::uint64_t& hash, const void* data, const std::size_t size) {
+        const auto* bytes = static_cast<const unsigned char*>(data);
+        for (std::size_t i = 0; i < size; ++i) {
+            hash ^= bytes[i];
+            hash *= kFnvPrime;
         }
+    }
+
+    void hashString(std::uint64_t& hash, const std::string& value) {
+        const std::uint64_t size = value.size();
+        for (unsigned int shift = 0; shift < 64; shift += 8) {
+            const auto byte = static_cast<std::uint8_t>(size >> shift);
+            hashBytes(hash, &byte, sizeof(byte));
+        }
+        hashBytes(hash, value.data(), value.size());
     }
 }
 
@@ -42,8 +46,8 @@ IdempotencyManager::IdempotencyManager(
     const time_t retentionTime,
     const time_t cleanupInterval)
     : persistenceManager_(persistenceManager)
-    , retentionTime_(retentionTime)
-    , cleanupInterval_(cleanupInterval) {
+    , retentionTime_(std::max<time_t>(1, retentionTime))
+    , cleanupInterval_(std::max<time_t>(1, cleanupInterval)) {
     
     if (!persistenceManager_) {
         LOG_WARN("持久化管理器为空，幂等去重功能可能受限");
@@ -105,32 +109,18 @@ std::string IdempotencyManager::calculateMessageHash(const MqttMessage& message)
 std::string IdempotencyManager::calculateMessageHash(const std::string& topic,
                                                      const std::string& payload,
                                                      QoS qos) {
-    // 组合消息特征
-    std::string combined = fmt::format("{}|{}|{}", topic, payload, static_cast<int>(qos));
-    
-    // 使用简单的 hash 实现（仅用于测试）
-    // 注意：
-    // - simple_sha256 目前只在前 sizeof(size_t) 字节写入有效数据，剩余字节填 0
-    // - 为避免生成包含大量尾部 '0' 的十六进制字符串，这里只使用前 effectiveLen 字节
-    //   作为幂等键（信息量与 std::hash<size_t> 等价）
-    unsigned char hash[32];
-    simple_sha256(reinterpret_cast<const unsigned char*>(combined.c_str()), 
-                  combined.length(), hash);
-    
-    // 只编码前 effectiveLen 字节，避免尾部全 0 造成日志/存储中长串 0
-    constexpr std::size_t effectiveLen = (sizeof(std::size_t) < 32)
-        ? sizeof(std::size_t)
-        : std::size_t(32);
-
-    // 转换为十六进制字符串（使用 fmt::format）
-    std::string result;
-    result.reserve(effectiveLen * 2);
-    for (std::size_t i = 0; i < effectiveLen; ++i) {
-        const unsigned char byte = hash[i];
-        result += fmt::format("{:02x}", byte);
-    }
-    
-    return result;
+    // std::hash不保证跨进程或跨标准库稳定，不能作为持久化键。
+    // 使用两个不同种子的FNV-1a流，并对字段加长度前缀，生成稳定的128位键。
+    std::uint64_t first = 14695981039346656037ULL;
+    std::uint64_t second = 7809847782465536322ULL;
+    hashString(first, topic);
+    hashString(first, payload);
+    hashString(second, payload);
+    hashString(second, topic);
+    const auto qosValue = static_cast<std::uint8_t>(qos);
+    hashBytes(first, &qosValue, sizeof(qosValue));
+    hashBytes(second, &qosValue, sizeof(qosValue));
+    return fmt::format("{:016x}{:016x}", first, second);
 }
 
 size_t IdempotencyManager::getDuplicateCount() const {
@@ -140,7 +130,7 @@ size_t IdempotencyManager::getDuplicateCount() const {
 
 void IdempotencyManager::setRetentionTime(time_t retentionTime) {
     std::lock_guard lock(mutex_);
-    retentionTime_ = retentionTime;
+    retentionTime_ = std::max<time_t>(1, retentionTime);
 }
 
 time_t IdempotencyManager::getRetentionTime() const {

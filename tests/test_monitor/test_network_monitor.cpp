@@ -46,8 +46,9 @@ TEST_F(NetworkMonitorTest, StartStop) {
 TEST_F(NetworkMonitorTest, GetStats) {
     auto stats = monitor_->getStats();
     
-    // 初始统计信息应该存在
-    EXPECT_TRUE(true);  // stats结构存在
+    EXPECT_FALSE(stats.available);
+    EXPECT_EQ(stats.latency, -1);
+    EXPECT_EQ(stats.lastCheckTime, 0);
 }
 
 // 测试获取网络质量
@@ -67,8 +68,7 @@ TEST_F(NetworkMonitorTest, NetworkRecoveredCallback) {
         callbackCalled = true;
     });
     
-    // 回调已设置
-    EXPECT_TRUE(true);
+    EXPECT_FALSE(callbackCalled);
 }
 
 // 测试网络丢失回调
@@ -79,8 +79,7 @@ TEST_F(NetworkMonitorTest, NetworkLostCallback) {
         callbackCalled = true;
     });
     
-    // 回调已设置
-    EXPECT_TRUE(true);
+    EXPECT_FALSE(callbackCalled);
 }
 
 // 测试网络质量变化回调
@@ -93,8 +92,8 @@ TEST_F(NetworkMonitorTest, QualityChangedCallback) {
         receivedQuality = quality;
     });
     
-    // 回调已设置
-    EXPECT_TRUE(true);
+    EXPECT_FALSE(callbackCalled);
+    EXPECT_EQ(receivedQuality, NetworkQuality::EXCELLENT);
 }
 
 // 测试监控线程生命周期

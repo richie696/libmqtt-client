@@ -81,8 +81,7 @@ TEST_F(ConnectionMonitorTest, DisconnectedCallback) {
         callbackCalled = true;
     });
     
-    // 回调已设置
-    EXPECT_TRUE(true);
+    EXPECT_FALSE(callbackCalled);
 }
 
 // 测试监控线程生命周期

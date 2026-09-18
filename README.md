@@ -1,12 +1,12 @@
 # MQTT 客户端库
 
-一个轻量级、高性能的跨平台 MQTT 客户端库，采用 C++17 标准开发，提供简洁易用的 API 接口。支持 MQTT 3.1.1 和 5.0 协议，适用于嵌入式设备、IoT 应用和工业自动化场景。
+一个面向桌面系统和资源较充足的嵌入式 Linux 的跨平台 MQTT 客户端库，采用 C++17 开发。支持 MQTT 3.1.1/5.0、TCP/TLS、自动重连、持久化与运行状态监控。
 
 ## ✨ 特性
 
 - 🚀 **跨平台支持**: Linux、Windows、macOS
 - 🎯 **多架构支持**: x86、x86_64、ARM32、ARM64、MIPS32
-- 📦 **轻量级设计**: 资源占用低，适合嵌入式环境
+- 📦 **明确定位**: 适用于桌面系统和嵌入式 Linux；MCU、裸机及轻量 RTOS 不在当前目标范围
 - 🔄 **智能重连**: 指数退避算法，自动恢复连接
 - 📡 **MQTT 5.0**: 完整支持 MQTT 5.0 协议标准
 - 🛠️ **易于集成**: 提供 CMake 构建系统，支持交叉编译
@@ -38,8 +38,8 @@ cd libmqtt-client
 
 **初始化脚本会自动：**
 - 检查基本依赖（Git、CMake、编译器）
-- 初始化 Git Submodules（下载 wolfMQTT）
-- 构建 wolfMQTT 依赖库
+- 初始化固定版本的 wolfMQTT 与 wolfSSL Submodule
+- 校验本机构建工具；依赖由主工程 CMake 统一构建
 
 ```bash
 # Linux/macOS
@@ -60,7 +60,7 @@ cd libmqtt-client
 ```
 
 构建产物位于 `build/` 目录：
-- 库文件：`build/lib/libmqtt_client-<arch>-<os>-1.0.0.{so|dylib|dll}`
+- 库文件：`build/lib/libmqtt_client-<arch>-<os>.{so|dylib}`（Windows 为 `.dll`，Unix 版本文件和符号链接由 CMake 生成）
 - 头文件：`build/include/mqtt_client/`
 
 ## 📦 依赖要求
@@ -76,34 +76,30 @@ cd libmqtt-client
 
 以下依赖会在构建时自动下载和编译，无需手动安装：
 
-- **fmtlib** - 字符串格式化库（必需）
-- **nlohmann/json** - JSON 解析库（可选，用于配置文件）
+- **fmtlib 12.1.0** - 字符串格式化库（必需）
+- **nlohmann/json 3.11.3** - JSON 解析与持久化支持（必需）
 - **yaml-cpp** - YAML 解析库（可选，用于配置文件）
 - **Google Test** - 测试框架（仅测试时）
 
 ### Git Submodule 依赖
 
-- **wolfMQTT** - MQTT 协议实现库（通过 git submodule 管理）
+- **wolfMQTT 2.1.0** - MQTT 协议实现（固定版本 Submodule）
+- **wolfSSL 5.9.2** - TLS 实现（固定版本 Submodule）
 
-### 可选系统依赖
-
-- **wolfSSL** - 用于 TLS/SSL 支持（可选，但推荐）
-  - macOS: `brew install wolfssl`
-  - Linux: `sudo apt-get install libwolfssl-dev`
-  - Windows: 从 [wolfSSL 官网](https://www.wolfssl.com/download/) 下载
+二者由主工程一同构建，不需要安装系统 wolfSSL。
 
 ### 快速安装依赖
 
 **macOS:**
 ```bash
 xcode-select --install  # 安装 Xcode Command Line Tools
-brew install cmake wolfssl
+brew install cmake
 ```
 
 **Linux (Ubuntu/Debian):**
 ```bash
 sudo apt-get update
-sudo apt-get install build-essential cmake libwolfssl-dev
+sudo apt-get install build-essential cmake git
 ```
 
 **Windows:**
@@ -139,13 +135,7 @@ sudo apt-get install build-essential cmake libwolfssl-dev
 ./scripts/unix/build.sh --menu
 ```
 
-菜单选项：
-1. 构建所有依赖和项目
-2. 仅构建 wolfMQTT
-3. 仅构建项目
-4. 运行所有测试 (含覆盖率报告)
-5. 清理所有构建文件
-6. 退出
+菜单提供项目构建、单元测试、集成测试、全量测试和清理后构建。
 
 ### macOS Universal Binary
 
@@ -191,17 +181,19 @@ cmake --install .
 
 ```cpp
 #include "mqtt_client/embedded_mqtt_client.h"
+#include <chrono>
 #include <iostream>
+#include <thread>
 
 int main() {
     using namespace mqtt_client;
     
     // 创建配置
     MqttConfig config;
-    config.basic.host = "mqtt.example.com";
-    config.basic.port = 1883;
+    config.server.host = "mqtt.example.com";
+    config.server.port = 1883;
     config.basic.clientId = "my_client";
-    config.basic.version = MqttProtocolVersion::V5_0;
+    config.basic.version = "5.0";
     
     // 创建客户端（立即初始化）
     EmbeddedMqttClient client(config);
@@ -209,7 +201,7 @@ int main() {
     // 连接
     auto result = client.connect();
     if (!result) {
-        std::cerr << "连接失败: " << result.error().message << std::endl;
+        std::cerr << "连接失败: " << result.error.message << std::endl;
         return 1;
     }
     
@@ -250,7 +242,7 @@ int main() {
     
     // 初始化
     if (auto result = client.initialize(config); !result) {
-        std::cerr << "初始化失败: " << result.error().message << std::endl;
+        std::cerr << "初始化失败: " << result.error.message << std::endl;
         return 1;
     }
     
@@ -271,17 +263,16 @@ int main() {
     using namespace mqtt_client;
     
     // 从 JSON 或 YAML 文件加载配置
-    auto configResult = MqttConfigManager::loadFromJson("config.json");
-    // 或
-    // auto configResult = MqttConfigManager::loadFromYaml("config.yaml");
+    MqttConfigManager configManager;
+    auto configResult = configManager.loadFromFile("config.json");
     
     if (!configResult) {
-        std::cerr << "加载配置失败: " << configResult.error().message << std::endl;
+        std::cerr << "加载配置失败: " << configResult.error.message << std::endl;
         return 1;
     }
     
     // 创建客户端
-    EmbeddedMqttClient client(configResult.value());
+    EmbeddedMqttClient client(configResult.value);
     
     // 连接和使用...
     client.connect();
@@ -333,7 +324,7 @@ int main() {
 ### 运行测试
 
 ```bash
-# 运行所有测试（自动启用覆盖率并生成报告）
+# 运行所有测试
 ./scripts/unix/build.sh --test all
 
 # 仅运行单元测试
@@ -361,17 +352,15 @@ ctest
 ./tests/test_config/test_config_manager
 ```
 
-### 代码覆盖率
-
-运行测试时会自动生成代码覆盖率报告：
+真实服务器测试默认关闭。启用时需显式提供测试服务器，避免误连公网：
 
 ```bash
-# 运行测试（自动生成覆盖率报告）
-./scripts/unix/build.sh --test all
-
-# 查看覆盖率报告
-open build/coverage_html/index.html  # macOS
-xdg-open build/coverage_html/index.html  # Linux
+MQTT_TEST_HOST=127.0.0.1 \
+MQTT_TEST_TCP_PORT=1883 \
+MQTT_TEST_TLS_PORT=8883 \
+MQTT_TEST_CA_CERT=/path/to/ca.pem \
+MQTT_TEST_ENABLE_TLS=true \
+./scripts/unix/build.sh --test integration
 ```
 
 更多测试信息请参考 [tests/README.md](tests/README.md)。
@@ -411,7 +400,8 @@ libmqtt-client/
 │       ├── init.ps1
 │       └── build.ps1
 ├── third_party/                  # 第三方依赖（Git Submodule）
-│   └── wolfmqtt/                 # wolfMQTT 库
+│   ├── wolfmqtt/                 # wolfMQTT 2.1.0
+│   └── wolfssl/                  # wolfSSL 5.9.2
 ├── toolchains/                   # 交叉编译工具链文件
 │   ├── arm-linux-gnueabihf.cmake
 │   ├── aarch64-linux-gnu.cmake

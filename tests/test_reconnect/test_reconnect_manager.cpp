@@ -8,6 +8,8 @@
 #include "mqtt_client/config/config.h"
 #include <thread>
 #include <chrono>
+#include <atomic>
+#include <future>
 
 using namespace mqtt_client;
 
@@ -75,7 +77,7 @@ TEST_F(ReconnectManagerTest, StopReconnect) {
     };
     
     // 启动重连（在后台线程）
-    manager_->startReconnect(connectFunc);
+    ASSERT_TRUE(manager_->startReconnect(connectFunc));
     
     // 等待一小段时间
     std::this_thread::sleep_for(std::chrono::milliseconds(50));
@@ -102,30 +104,70 @@ TEST_F(ReconnectManagerTest, UpdateConfig) {
     
     manager_->updateConfig(newConfig);
     
-    // 配置应该已更新（通过行为验证）
-    EXPECT_TRUE(true);
+    EXPECT_EQ(manager_->getNextRetryInterval(), newConfig.baseInterval);
 }
 
 // 测试重连回调
 TEST_F(ReconnectManagerTest, ReconnectCallback) {
-    bool callbackCalled = false;
-    int receivedAttempt = -1;
+    std::atomic<bool> callbackCalled{false};
+    std::atomic<int> receivedAttempt{-1};
     
-    manager_->setOnReconnectAttempt([&](int attempt, int maxAttempts, long interval) {
-        callbackCalled = true;
-        receivedAttempt = attempt;
+    manager_->setOnReconnectAttempt([&](int attempt, int, long) {
+        callbackCalled.store(true);
+        receivedAttempt.store(attempt);
     });
     
     // 启动重连（会触发回调）
     auto connectFunc = []() -> bool { return false; };
-    manager_->startReconnect(connectFunc);
+    ASSERT_TRUE(manager_->startReconnect(connectFunc));
     
     // 等待一小段时间让回调有机会执行
     std::this_thread::sleep_for(std::chrono::milliseconds(150));
     
     manager_->stopReconnect();
     
-    // 回调应该被调用（如果重连进行了多次尝试）
-    // 注意：由于是异步的，这里只验证回调设置成功
-    EXPECT_TRUE(true);
+    EXPECT_TRUE(callbackCalled.load());
+    EXPECT_GE(receivedAttempt.load(), 1);
+}
+
+TEST(ReconnectManagerLifecycleTest, NaturalCompletionCanBeDestroyed) {
+    MqttConfig::ReconnectConfig config;
+    config.enableJitter = false;
+
+    std::promise<void> connected;
+    auto connectedFuture = connected.get_future();
+    {
+        ReconnectManager manager(config);
+        ASSERT_TRUE(manager.startReconnect([&connected] {
+            connected.set_value();
+            return true;
+        }));
+        ASSERT_EQ(connectedFuture.wait_for(std::chrono::seconds(1)),
+                  std::future_status::ready);
+    }
+}
+
+TEST(ReconnectManagerLifecycleTest, CanRestartAfterNaturalCompletion) {
+    MqttConfig::ReconnectConfig config;
+    config.enableJitter = false;
+    ReconnectManager manager(config);
+
+    std::atomic<int> calls{0};
+    auto connect = [&calls] {
+        calls.fetch_add(1);
+        return true;
+    };
+
+    ASSERT_TRUE(manager.startReconnect(connect));
+    for (int i = 0; i < 100 && manager.isReconnecting(); ++i) {
+        std::this_thread::sleep_for(std::chrono::milliseconds(5));
+    }
+    ASSERT_FALSE(manager.isReconnecting());
+
+    ASSERT_TRUE(manager.startReconnect(connect));
+    for (int i = 0; i < 100 && calls.load() < 2; ++i) {
+        std::this_thread::sleep_for(std::chrono::milliseconds(5));
+    }
+    manager.stopReconnect();
+    EXPECT_EQ(calls.load(), 2);
 }

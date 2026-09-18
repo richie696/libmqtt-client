@@ -71,7 +71,7 @@ public:
      * @brief 计算消息hash值
      * 
      * @param message 消息对象
-     * @return 消息hash值（SHA-256）
+     * @return 稳定的128位消息hash值
      */
     [[nodiscard]] static std::string calculateMessageHash(const MqttMessage& message);
     

@@ -174,9 +174,6 @@ private:
     // 连接管理器
     MqttConnectionManager& connectionManager_;
     
-    // 配置
-    const MqttConfig& config_;
-    
     // 订阅缓存（主题 -> 订阅信息）
     std::unordered_map<std::string, Subscription> subscriptions_;
     

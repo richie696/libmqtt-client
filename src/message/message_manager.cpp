@@ -90,14 +90,16 @@ Result<bool> MqttMessageManager::publish(const std::string& topic,
     
     // 如果启用批量处理，加入批量队列
     if (config_.performance.batch.enableBatchSend) {
-        std::lock_guard lock(batchMutex_);
-        batchQueue_.push_back(msg);
-        
-        // 检查是否达到批量大小
-        if (batchQueue_.size() >= config_.performance.batch.maxBatchSize) {
+        bool flushNow = false;
+        {
+            std::lock_guard lock(batchMutex_);
+            batchQueue_.push_back(msg);
+            flushNow = batchQueue_.size() >= config_.performance.batch.maxBatchSize;
+        }
+        queueCV_.notify_one();
+        if (flushNow) {
             processBatch();
         }
-        
         return Result<bool>::Success(true);
     }
     
@@ -110,9 +112,28 @@ Result<bool> MqttMessageManager::publishSync(const std::string& topic,
                                             const QoS qos,
                                             const bool retained,
                                             [[maybe_unused]] int timeoutMs) {
-    // 同步发布：先发布，然后等待完成（简化实现）
-    // 实际实现中可以使用future/promise机制
-    return publish(topic, payload, qos, retained);
+    if (topic.empty() || topic.length() > 65535) {
+        return Result<bool>::Failure(
+            MqttError(MqttErrorCode::INVALID_TOPIC, "主题无效: 空或过长"));
+    }
+    const size_t maxSize = config_.mqtt5.maximumPacketSize > 0
+        ? config_.mqtt5.maximumPacketSize : 256 * 1024;
+    if (payload.size() > maxSize) {
+        return Result<bool>::Failure(
+            MqttError(MqttErrorCode::MESSAGE_TOO_LARGE,
+                      fmt::format("消息过大: {} 字节", payload.size())));
+    }
+    if (!connectionManager_.isConnected()) {
+        return Result<bool>::Failure(
+            MqttError(MqttErrorCode::NOT_CONNECTED, "未连接，无法同步发布消息"));
+    }
+    QueuedMessage msg;
+    msg.topic = topic;
+    msg.payload = payload;
+    msg.qos = qos;
+    msg.retained = retained;
+    msg.timestamp = std::time(nullptr);
+    return sendMessage(msg);
 }
 
 Result<bool> MqttMessageManager::queueMessage(const std::string& topic,
@@ -130,8 +151,17 @@ Result<bool> MqttMessageManager::queueMessage(const std::string& topic,
     msg.retained = retained;
     msg.priority = priority;
     msg.timestamp = std::time(nullptr);
+    return enqueueMessage(std::move(msg));
+}
+
+Result<bool> MqttMessageManager::enqueueMessage(QueuedMessage msg) {
     std::lock_guard lock(queueMutex_);
-    
+
+    if (config_.messageQueue.maxSendQueueSize == 0) {
+        return Result<bool>::Failure(
+            MqttError(MqttErrorCode::QUEUE_FULL, "发送队列容量配置为0"));
+    }
+
     // 检查队列大小（工业级策略：明确的丢弃规则）
     if (queue_.size() >= config_.messageQueue.maxSendQueueSize) {
         // 1. 低优先级消息：直接丢弃新消息，保护队列中已有的更重要消息
@@ -160,6 +190,15 @@ Result<bool> MqttMessageManager::queueMessage(const std::string& topic,
                 (it->priority == dropIt->priority && it->timestamp < dropIt->timestamp)) {
                 dropIt = it;
             }
+        }
+
+        if (msg.priority <= dropIt->priority) {
+            for (const auto& queued : buffer) {
+                queue_.push(queued);
+            }
+            return Result<bool>::Failure(
+                MqttError(MqttErrorCode::QUEUE_FULL,
+                          "消息队列已满，且新消息优先级不足以淘汰现有消息"));
         }
 
         const QueuedMessage dropped = *dropIt;
@@ -199,13 +238,8 @@ Result<bool> MqttMessageManager::queueMessage(const std::string& topic,
 }
 
 size_t MqttMessageManager::getQueueSize() const {
-    // 使用try_to_lock避免在析构时阻塞
-    const std::unique_lock lock(queueMutex_, std::try_to_lock);
-    if (lock.owns_lock()) {
-        return queue_.size();
-    }
-    // 如果无法获取锁，返回0（避免阻塞）
-    return 0;
+    std::lock_guard lock(queueMutex_);
+    return queue_.size();
 }
 
 void MqttMessageManager::clearQueue() {
@@ -217,33 +251,39 @@ void MqttMessageManager::clearQueue() {
     }
 }
 
+void MqttMessageManager::flush() {
+    if (!connectionManager_.isConnected()) {
+        return;
+    }
+    processBatch();
+    processQueue();
+}
+
 void MqttMessageManager::processQueue() {
-    std::lock_guard lock(queueMutex_);
-    
-    // 处理队列中的所有消息
-    while (!queue_.empty() && connectionManager_.isConnected()) {
-        QueuedMessage msg = queue_.top();
-        queue_.pop();
+    while (connectionManager_.isConnected()) {
+        QueuedMessage msg;
+        {
+            std::lock_guard lock(queueMutex_);
+            if (queue_.empty()) {
+                break;
+            }
+            msg = queue_.top();
+            queue_.pop();
+        }
         
-        // 发送消息
         if (const auto result = sendMessage(msg); !result) {
-            // 发送失败，如果未超过重试次数，重新入队
             if (msg.retryCount < config_.messageQueue.maxRetry) {
                 msg.retryCount++;
-                queue_.push(msg);
-                
-                // 更新统计
+                if (auto queued = enqueueMessage(std::move(msg)); !queued) {
+                    LOG_ERROR("重试消息重新入队失败: " + queued.error.message);
+                }
                 {
                     std::lock_guard statsLock(statsMutex_);
                     stats_.totalRetried++;
                 }
             } else {
-                // 超过重试次数，丢弃消息
                 LOG_ERROR(fmt::format("消息重试次数超限，丢弃: {}", msg.topic));
-                updateStats(false);
             }
-        } else {
-            updateStats(true);
         }
     }
 }
@@ -295,29 +335,34 @@ Result<bool> MqttMessageManager::sendMessage(const QueuedMessage& msg) {
 }
 
 void MqttMessageManager::processBatch() {
-    std::lock_guard lock(batchMutex_);
-    
-    if (batchQueue_.empty()) {
-        return;
+    std::vector<QueuedMessage> batch;
+    {
+        std::lock_guard lock(batchMutex_);
+        if (batchQueue_.empty()) {
+            return;
+        }
+        batch.swap(batchQueue_);
     }
-    
-    // 批量发送消息
-    for (const auto& msg : batchQueue_) {
+
+    for (auto& msg : batch) {
         if (const auto result = sendMessage(msg); !result.success) {
             LOG_ERROR(fmt::format("批量消息中存在失败消息：{}", msg.messageId));
+            if (msg.retryCount < config_.messageQueue.maxRetry) {
+                ++msg.retryCount;
+                if (auto queued = enqueueMessage(std::move(msg)); !queued) {
+                    LOG_ERROR("批量消息重试入队失败: " + queued.error.message);
+                }
+            }
         }
     }
-    
-    // 清空批量队列
-    batchQueue_.clear();
 }
 
 void MqttMessageManager::messageThread() {
     while (running_.load()) {
         std::unique_lock lock(queueMutex_);
-        
-        // 等待队列中有消息或停止信号
-        queueCV_.wait(lock, [this] {
+        const auto batchDelay = std::chrono::milliseconds(
+            std::max(1, config_.performance.batch.maxBatchDelay));
+        queueCV_.wait_for(lock, batchDelay, [this] {
             return !queue_.empty() || !running_.load();
         });
         
@@ -325,7 +370,14 @@ void MqttMessageManager::messageThread() {
             break;
         }
         
-        // 处理队列中的消息
+        lock.unlock();
+
+        if (config_.performance.batch.enableBatchSend &&
+            connectionManager_.isConnected()) {
+            processBatch();
+        }
+
+        lock.lock();
         if (!queue_.empty()) {
             // 检查连接状态（使用try-catch保护，避免访问已销毁的对象）
             bool isConnected = false;
@@ -343,15 +395,14 @@ void MqttMessageManager::messageThread() {
                 
                 // 发送消息
                 if (const auto result = sendMessage(msg); !result) {
-                    // 发送失败，如果未超过重试次数，重新入队
                     if (msg.retryCount < config_.messageQueue.maxRetry) {
                         msg.retryCount++;
-                        if (auto sendResult = queueMessage(msg.topic, msg.payload, msg.qos, msg.retained, msg.priority); !sendResult.success) {
-                            LOG_ERROR(fmt::format("消息重试入队失败，丢弃：{}", msg.messageId));
+                        const auto messageId = msg.messageId;
+                        if (auto sendResult = enqueueMessage(std::move(msg)); !sendResult.success) {
+                            LOG_ERROR(fmt::format("消息重试入队失败，丢弃：{}", messageId));
                         }
                     } else {
                         LOG_ERROR(fmt::format("消息重试次数超限，丢弃: {}", msg.topic));
-                        updateStats(false);
                     }
                 }
             } else {

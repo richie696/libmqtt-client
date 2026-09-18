@@ -111,7 +111,7 @@ private:
      * @param attempt 当前尝试次数
      * @return long 重试间隔（毫秒）
      */
-    [[nodiscard]] long calculateBackoffInterval(int attempt) const noexcept;
+    [[nodiscard]] long calculateBackoffInterval(int attempt) const;
     
     /**
      * @brief 重连线程
@@ -128,6 +128,7 @@ private:
     std::atomic<long> totalRetryTime_;   ///< 总重试时间
     
     std::thread reconnectThread_;         ///< 重连线程
+    mutable std::mutex threadMutex_;       ///< 保护thread对象的join/赋值
     mutable std::mutex mutex_;             ///< 互斥锁
     std::condition_variable cv_;          ///< 条件变量
     

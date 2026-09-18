@@ -10,7 +10,6 @@
 
 #include <string>
 #include <map>
-#include <fmt/core.h>
 
 
 namespace mqtt_client {
@@ -101,10 +100,11 @@ struct MqttError {
      * @brief 转换为字符串
      */
     [[nodiscard]] std::string toString() const {
+        std::string result = "[" + std::to_string(static_cast<int>(code)) + "] " + message;
         if (!details.empty()) {
-            return fmt::format("[{}] {} ({})", static_cast<int>(code), message, details);
+            result += " (" + details + ")";
         }
-        return fmt::format("[{}] {}", static_cast<int>(code), message);
+        return result;
     }
     
     /**

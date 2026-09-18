@@ -154,6 +154,11 @@ public:
      * @brief 清空队列
      */
     void clearQueue();
+
+    /**
+     * @brief 尽可能发送当前批次和队列中的待发送消息
+     */
+    void flush();
     
     /**
      * @brief 处理队列中的消息
@@ -198,6 +203,11 @@ private:
      * @brief 处理批量消息
      */
     void processBatch();
+
+    /**
+     * @brief 将完整队列项入队，保留重试次数等内部状态
+     */
+    [[nodiscard]] Result<bool> enqueueMessage(QueuedMessage msg);
     
     /**
      * @brief 启动消息处理线程（延迟启动，避免构造时mutex问题）

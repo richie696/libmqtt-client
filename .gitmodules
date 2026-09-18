@@ -4,3 +4,6 @@
 [submodule "third_party/wolfmqtt"]
 	path = third_party/wolfmqtt
 	url = https://github.com/wolfSSL/wolfMQTT.git
+[submodule "third_party/wolfssl"]
+	path = third_party/wolfssl
+	url = https://github.com/wolfSSL/wolfssl.git

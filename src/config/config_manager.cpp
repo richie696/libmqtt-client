@@ -71,7 +71,8 @@ Result<MqttConfig> MqttConfigManager::loadFromJson(const std::string& jsonStr) {
     return result;
 }
 
-Result<MqttConfig> MqttConfigManager::loadFromJsonImpl(const std::string& jsonStr) {
+Result<MqttConfig> MqttConfigManager::loadFromJsonImpl(
+    [[maybe_unused]] const std::string& jsonStr) {
     // 注意：此方法不加锁，调用者必须已经持有锁
 #ifdef ENABLE_JSON
     try {
@@ -354,27 +355,28 @@ bool MqttConfigManager::validateServerConfig(const MqttConfig::ServerConfig& con
 bool MqttConfigManager::validateSecurityConfig(const MqttConfig::SecurityConfig& config,
                                                std::vector<std::string>& errors) {
     bool valid = true;
-    
-    if (config.enableTLS) {
-        if (config.tlsVersion != "1.2" && config.tlsVersion != "1.3") {
-            errors.emplace_back("TLS版本必须是'1.2'或'1.3'");
-            valid = false;
-        }
-        
-        if (config.verifyCertificate) {
-            if (config.caCertificatePath.empty()) {
-                errors.emplace_back("启用证书验证时，CA证书路径不能为空");
-                valid = false;
-            }
-        }
-        
-        // 如果提供了客户端证书，必须同时提供私钥
-        if (!config.clientCertificatePath.empty() && config.clientPrivateKeyPath.empty()) {
-            errors.emplace_back("提供客户端证书时必须同时提供私钥");
-            valid = false;
-        }
+
+    if (config.tlsVersion != "1.2" && config.tlsVersion != "1.3") {
+        errors.emplace_back("TLS版本必须是'1.2'或'1.3'");
+        valid = false;
     }
-    
+
+    if (config.verifyCertificate && config.caCertificatePath.empty()) {
+        errors.emplace_back("启用证书验证时，CA证书路径不能为空");
+        valid = false;
+    }
+
+    if (config.verifyDepth <= 0) {
+        errors.emplace_back("证书验证深度必须大于0");
+        valid = false;
+    }
+
+    // 双向TLS必须同时提供客户端证书和私钥。
+    if (config.clientCertificatePath.empty() != config.clientPrivateKeyPath.empty()) {
+        errors.emplace_back("客户端证书与私钥必须同时提供");
+        valid = false;
+    }
+
     return valid;
 }
 
@@ -568,7 +570,7 @@ void MqttConfigManager::registerUpdateCallback(const std::function<void(const Mq
     updateCallbacks_.push_back(callback);
 }
 
-const MqttConfig& MqttConfigManager::getCurrentConfig() const {
+MqttConfig MqttConfigManager::getCurrentConfig() const {
     std::lock_guard lock(mutex_);
     return currentConfig_;
 }
@@ -604,7 +606,8 @@ Result<std::string> MqttConfigManager::fetchConfigFromServer(
                  "从服务器获取配置功能暂未实现，请使用本地配置文件"));
 }
 
-Result<MqttConfig> MqttConfigManager::parseJsonConfigImpl(const std::string& jsonStr) {
+Result<MqttConfig> MqttConfigManager::parseJsonConfigImpl(
+    [[maybe_unused]] const std::string& jsonStr) {
 #ifdef ENABLE_JSON
     try {
         json j = json::parse(jsonStr);

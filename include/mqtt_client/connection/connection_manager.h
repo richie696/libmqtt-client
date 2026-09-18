@@ -160,7 +160,7 @@ private:
     void updateState(ConnectionState newState);
     
     // 配置
-    const MqttConfig& config_;
+    MqttConfig config_;
     
     // wolfMQTT适配器（可能由外部传入或内部创建）
     // 注意：如果外部传入，使用自定义删除器，不实际删除对象

@@ -34,13 +34,17 @@ MqttConnectionManager::MqttConnectionManager(const MqttConfig& config,
         ownsAdapter_ = true;
     }
     
-    // 延迟设置回调，避免在构造时立即触发mutex问题
-    // 回调将在第一次调用 connect() 时设置
+    adapter_->setConnectionCallback([this](const bool connected) {
+        if (!connected && state_.load() != ConnectionState::DISCONNECTING) {
+            handleConnectionLost("底层网络连接已断开");
+        }
+    });
 }
 
 MqttConnectionManager::~MqttConnectionManager() {
-    // 直接更新原子变量，不尝试获取mutex
-    // 在析构函数中获取mutex可能导致问题，因为对象可能正在被销毁
+    if (adapter_) {
+        adapter_->setConnectionCallback({});
+    }
     connected_.store(false);
     state_.store(ConnectionState::DISCONNECTED);
     
@@ -55,47 +59,53 @@ MqttConnectionManager::~MqttConnectionManager() {
 }
 
 Result<bool> MqttConnectionManager::connect() {
-    std::lock_guard lock(mutex_);
-    
-    // 检查是否已连接
-    if (connected_.load()) {
-        return Result<bool>::Success(true);
+    WolfMqttAdapter* adapter = nullptr;
+    {
+        std::lock_guard lock(mutex_);
+        if (connected_.load()) {
+            return Result<bool>::Success(true);
+        }
+        if (const ConnectionState currentState = state_.load();
+            currentState == ConnectionState::CONNECTING ||
+            currentState == ConnectionState::DISCONNECTING) {
+            return Result<bool>::Failure(
+                MqttError(MqttErrorCode::INVALID_STATE,
+                         "连接状态正在切换"));
+        }
+        adapter = adapter_.get();
+        if (!adapter) {
+            return Result<bool>::Failure(
+                MqttError(MqttErrorCode::NOT_INITIALIZED,
+                         "适配器未初始化"));
+        }
+        updateState(ConnectionState::CONNECTING);
     }
-    
-    // 检查状态
-    if (const ConnectionState currentState = state_.load(); currentState == ConnectionState::CONNECTING) {
-        return Result<bool>::Failure(
-            MqttError(MqttErrorCode::INVALID_STATE,
-                     "连接正在进行中"));
-    }
-    
-    // 确保适配器已初始化
-    if (!adapter_) {
-        return Result<bool>::Failure(
-            MqttError(MqttErrorCode::NOT_INITIALIZED,
-                     "适配器未初始化"));
-    }
-    
-    // 更新状态为连接中
-    updateState(ConnectionState::CONNECTING);
-    
+
     // 初始化适配器（如果尚未初始化）
-    if (auto initResult = adapter_->initialize(); !initResult) {
+    if (auto initResult = adapter->initialize(); !initResult) {
         updateState(ConnectionState::DISCONNECTED);
         handleConnectFailure("适配器初始化失败: " + initResult.error.message);
         return initResult;
     }
     
     // 执行连接
-    if (auto connectResult = adapter_->connect(); !connectResult) {
+    if (auto connectResult = adapter->connect(); !connectResult) {
         updateState(ConnectionState::DISCONNECTED);
         handleConnectFailure("连接失败: " + connectResult.error.message);
         return connectResult;
     }
     
-    // 连接成功
-    updateState(ConnectionState::CONNECTED);
+    // 如果接收线程在CONNECT返回后立刻检测到断线，它会把状态改为
+    // DISCONNECTED。这里用CAS避免再把失效连接覆盖成CONNECTED。
     connected_.store(true);
+    ConnectionState expected = ConnectionState::CONNECTING;
+    if (!adapter->isConnected() ||
+        !state_.compare_exchange_strong(expected, ConnectionState::CONNECTED)) {
+        connected_.store(false);
+        return Result<bool>::Failure(
+            MqttError(MqttErrorCode::NETWORK_ERROR,
+                      "连接建立后立即中断"));
+    }
     lastConnectTime_.store(std::time(nullptr));
     
     handleConnectSuccess();
@@ -104,42 +114,30 @@ Result<bool> MqttConnectionManager::connect() {
 }
 
 Result<bool> MqttConnectionManager::disconnect() {
-    // 使用try_lock避免在析构时死锁
-    const std::unique_lock lock(mutex_, std::try_to_lock);
-    if (!lock.owns_lock()) {
-        // 无法获取锁，可能正在析构，直接返回成功
-        connected_.store(false);
-        state_.store(ConnectionState::DISCONNECTED);
-        return Result<bool>::Success(true);
+    WolfMqttAdapter* adapter = nullptr;
+    {
+        std::lock_guard lock(mutex_);
+        if (!connected_.load() && state_.load() == ConnectionState::DISCONNECTED) {
+            return Result<bool>::Success(true);
+        }
+        updateState(ConnectionState::DISCONNECTING);
+        adapter = adapter_.get();
     }
-    
-    // 检查是否已断开
-    if (!connected_.load()) {
-        return Result<bool>::Success(true);
-    }
-    
-    // 更新状态为断开中
-    updateState(ConnectionState::DISCONNECTING);
-    
-    // 执行断开
-    if (adapter_) {
-        if (const auto disconnectResult = adapter_->disconnect(); !disconnectResult) {
-            // 即使断开失败，也标记为已断开
-            LOG_WARN("断开连接时出错: " + disconnectResult.error.message);
+
+    Result<bool> result = Result<bool>::Success(true);
+    if (adapter) {
+        result = adapter->disconnect();
+        if (!result) {
+            LOG_WARN("断开连接时出错: " + result.error.message);
         }
     }
-    
-    // 更新状态
+
     updateState(ConnectionState::DISCONNECTED);
     connected_.store(false);
-    
-    return Result<bool>::Success(true);
+    return result;
 }
 
 Result<bool> MqttConnectionManager::reconnect() {
-    std::lock_guard lock(mutex_);
-    
-    // 先断开当前连接
     if (connected_.load()) {
         if (const auto result = disconnect(); !result) {
             LOG_ERROR("断开当前连接失败: " + result.error.message);
@@ -153,7 +151,6 @@ Result<bool> MqttConnectionManager::reconnect() {
     // 更新状态为重连中
     updateState(ConnectionState::RECONNECTING);
     
-    // 执行连接
     auto result = connect();
     
     if (!result) {
@@ -206,11 +203,15 @@ WolfMqttAdapter* MqttConnectionManager::getAdapter() const {
 
 void MqttConnectionManager::handleConnectSuccess() {
     LOG_INFO("MQTT连接成功");
-    
-    // 调用连接成功回调
-    if (onConnected_) {
+
+    std::function<void()> callback;
+    {
+        std::lock_guard lock(mutex_);
+        callback = onConnected_;
+    }
+    if (callback) {
         try {
-            onConnected_();
+            callback();
         } catch (const std::exception& e) {
             LOG_ERROR("连接成功回调执行失败: " + std::string(e.what()));
         }
@@ -219,11 +220,15 @@ void MqttConnectionManager::handleConnectSuccess() {
 
 void MqttConnectionManager::handleConnectFailure(const std::string& reason) {
     LOG_ERROR("MQTT连接失败: " + reason);
-    
-    // 调用连接失败回调
-    if (onConnectFailure_) {
+
+    std::function<void(const std::string&)> callback;
+    {
+        std::lock_guard lock(mutex_);
+        callback = onConnectFailure_;
+    }
+    if (callback) {
         try {
-            onConnectFailure_(reason);
+            callback(reason);
         } catch (const std::exception& e) {
             LOG_ERROR("连接失败回调执行失败: " + std::string(e.what()));
         }
@@ -237,10 +242,14 @@ void MqttConnectionManager::handleConnectionLost(const std::string& cause) {
     updateState(ConnectionState::DISCONNECTED);
     connected_.store(false);
     
-    // 调用连接丢失回调
-    if (onConnectionLost_) {
+    std::function<void(const std::string&)> callback;
+    {
+        std::lock_guard lock(mutex_);
+        callback = onConnectionLost_;
+    }
+    if (callback) {
         try {
-            onConnectionLost_(cause);
+            callback(cause);
         } catch (const std::exception& e) {
             LOG_ERROR("连接丢失回调执行失败: " + std::string(e.what()));
         }

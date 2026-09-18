@@ -55,7 +55,7 @@ TEST_F(SubscriptionManagerTest, Subscribe) {
     
     MessageCallback callback = [&](std::string_view topic,
                                    std::string_view payload,
-                                   const MqttProperties& properties) {
+                                   const MqttProperties&) {
         callbackCalled = true;
         receivedTopic = std::string(topic);
         receivedPayload = std::string(payload);
@@ -67,27 +67,28 @@ TEST_F(SubscriptionManagerTest, Subscribe) {
         QoS::QOS_1
     );
     
-    // 订阅结果取决于连接状态
-    EXPECT_TRUE(result.success || !result.success);
+    ASSERT_TRUE(result.success);
+    EXPECT_TRUE(subscriptionManager_->isSubscribed("test/topic"));
 }
 
 // 测试取消订阅
 TEST_F(SubscriptionManagerTest, Unsubscribe) {
     // 先订阅
     MessageCallback callback = [](std::string_view, std::string_view, const MqttProperties&) {};
-    subscriptionManager_->subscribe("test/topic", callback, QoS::QOS_1);
+    ASSERT_TRUE(subscriptionManager_->subscribe("test/topic", callback, QoS::QOS_1));
     
     // 取消订阅
     auto result = subscriptionManager_->unsubscribe("test/topic");
-    EXPECT_TRUE(result.success || !result.success);
+    EXPECT_TRUE(result.success);
+    EXPECT_FALSE(subscriptionManager_->isSubscribed("test/topic"));
 }
 
 // 测试取消所有订阅
 TEST_F(SubscriptionManagerTest, UnsubscribeAll) {
     // 添加多个订阅
     MessageCallback callback = [](std::string_view, std::string_view, const MqttProperties&) {};
-    subscriptionManager_->subscribe("test/topic1", callback, QoS::QOS_1);
-    subscriptionManager_->subscribe("test/topic2", callback, QoS::QOS_1);
+    ASSERT_TRUE(subscriptionManager_->subscribe("test/topic1", callback, QoS::QOS_1));
+    ASSERT_TRUE(subscriptionManager_->subscribe("test/topic2", callback, QoS::QOS_1));
     
     // 取消所有订阅
     subscriptionManager_->unsubscribeAll();
@@ -104,8 +105,8 @@ TEST_F(SubscriptionManagerTest, IsSubscribed) {
     EXPECT_FALSE(subscriptionManager_->isSubscribed("test/topic"));
     
     // 订阅后应该已订阅（如果连接成功）
-    subscriptionManager_->subscribe("test/topic", callback, QoS::QOS_1);
-    // 注意：实际订阅状态取决于连接状态
+    ASSERT_TRUE(subscriptionManager_->subscribe("test/topic", callback, QoS::QOS_1));
+    EXPECT_TRUE(subscriptionManager_->isSubscribed("test/topic"));
 }
 
 // 测试获取已订阅主题列表
@@ -117,12 +118,12 @@ TEST_F(SubscriptionManagerTest, GetSubscribedTopics) {
     EXPECT_TRUE(topics.empty());
     
     // 添加订阅
-    subscriptionManager_->subscribe("test/topic1", callback, QoS::QOS_1);
-    subscriptionManager_->subscribe("test/topic2", callback, QoS::QOS_1);
+    ASSERT_TRUE(subscriptionManager_->subscribe("test/topic1", callback, QoS::QOS_1));
+    ASSERT_TRUE(subscriptionManager_->subscribe("test/topic2", callback, QoS::QOS_1));
     
     // 获取主题列表
     topics = subscriptionManager_->getSubscribedTopics();
-    // 主题数量可能增加（取决于连接状态）
+    EXPECT_EQ(topics.size(), 2U);
 }
 
 // 测试恢复订阅
@@ -130,11 +131,11 @@ TEST_F(SubscriptionManagerTest, ResubscribeAll) {
     MessageCallback callback = [](std::string_view, std::string_view, const MqttProperties&) {};
     
     // 添加持久化订阅
-    subscriptionManager_->subscribe("test/persistent", callback, QoS::QOS_1);
+    ASSERT_TRUE(subscriptionManager_->subscribe("test/persistent", callback, QoS::QOS_1));
     
     // 恢复订阅
     auto result = subscriptionManager_->resubscribeAll();
-    EXPECT_TRUE(result.success || !result.success);
+    EXPECT_FALSE(result.success);
 }
 
 // 测试消息分发
@@ -145,34 +146,50 @@ TEST_F(SubscriptionManagerTest, DispatchMessage) {
     
     MessageCallback callback = [&](std::string_view topic,
                                    std::string_view payload,
-                                   const MqttProperties& properties) {
+                                   const MqttProperties&) {
         callbackCalled = true;
         receivedTopic = std::string(topic);
         receivedPayload = std::string(payload);
     };
     
     // 订阅主题
-    subscriptionManager_->subscribe("test/dispatch", callback, QoS::QOS_1);
+    ASSERT_TRUE(subscriptionManager_->subscribe("test/dispatch", callback, QoS::QOS_1));
     
     // 分发消息
     MqttProperties properties;
     subscriptionManager_->dispatchMessage("test/dispatch", "test payload", properties);
-    
-    // 回调应该被调用（如果订阅成功）
-    // 注意：实际行为取决于订阅状态
+
+    EXPECT_TRUE(callbackCalled);
+    EXPECT_EQ(receivedTopic, "test/dispatch");
+    EXPECT_EQ(receivedPayload, "test payload");
 }
 
 // 测试通配符订阅
 TEST_F(SubscriptionManagerTest, WildcardSubscription) {
-    MessageCallback callback = [](std::string_view, std::string_view, const MqttProperties&) {};
+    int singleLevelCalls = 0;
+    int multiLevelCalls = 0;
     
     // 单级通配符
-    auto result1 = subscriptionManager_->subscribe("test/+/status", callback, QoS::QOS_1);
-    EXPECT_TRUE(result1.success || !result1.success);
+    auto result1 = subscriptionManager_->subscribe(
+        "test/+/status",
+        [&](std::string_view, std::string_view, const MqttProperties&) {
+            ++singleLevelCalls;
+        },
+        QoS::QOS_1);
+    ASSERT_TRUE(result1.success);
     
     // 多级通配符
-    auto result2 = subscriptionManager_->subscribe("test/#", callback, QoS::QOS_1);
-    EXPECT_TRUE(result2.success || !result2.success);
+    auto result2 = subscriptionManager_->subscribe(
+        "test/#",
+        [&](std::string_view, std::string_view, const MqttProperties&) {
+            ++multiLevelCalls;
+        },
+        QoS::QOS_1);
+    ASSERT_TRUE(result2.success);
+
+    subscriptionManager_->dispatchMessage("test/device/status", "online");
+    EXPECT_EQ(singleLevelCalls, 1);
+    EXPECT_EQ(multiLevelCalls, 1);
 }
 
 // 测试不同QoS级别的订阅
@@ -181,13 +198,13 @@ TEST_F(SubscriptionManagerTest, DifferentQoSLevels) {
     
     // QoS 0
     auto result0 = subscriptionManager_->subscribe("test/qos0", callback, QoS::QOS_0);
-    EXPECT_TRUE(result0.success || !result0.success);
+    EXPECT_TRUE(result0.success);
     
     // QoS 1
     auto result1 = subscriptionManager_->subscribe("test/qos1", callback, QoS::QOS_1);
-    EXPECT_TRUE(result1.success || !result1.success);
+    EXPECT_TRUE(result1.success);
     
     // QoS 2
     auto result2 = subscriptionManager_->subscribe("test/qos2", callback, QoS::QOS_2);
-    EXPECT_TRUE(result2.success || !result2.success);
+    EXPECT_TRUE(result2.success);
 }

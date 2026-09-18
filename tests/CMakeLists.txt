@@ -26,6 +26,7 @@ if(NOT GTest_FOUND)
     include(FetchContent)
     set(FETCHCONTENT_QUIET OFF)
     
+    set(INSTALL_GTEST OFF CACHE BOOL "" FORCE)
     FetchContent_Declare(
         googletest
         GIT_REPOSITORY https://github.com/google/googletest.git
@@ -259,6 +260,25 @@ if(GTest_FOUND OR TARGET gtest)
         CXX_STANDARD 17
         CXX_STANDARD_REQUIRED ON
     )
+
+    if(ENABLE_INTEGRATION_TESTS)
+        add_test(
+            NAME integration_mqtt311_tcp_tls
+            COMMAND test_mqtt311_tcp_tls
+        )
+        add_test(
+            NAME integration_mqtt5_tcp_tls
+            COMMAND test_mqtt5_tcp_tls
+        )
+        set_tests_properties(
+            integration_mqtt311_tcp_tls
+            integration_mqtt5_tcp_tls
+            PROPERTIES
+                LABELS "integration;mqtt"
+                TIMEOUT 120
+                RUN_SERIAL TRUE
+        )
+    endif()
     
     message(STATUS "MQTT 3.1.1 测试程序已添加")
     

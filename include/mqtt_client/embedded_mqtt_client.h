@@ -126,9 +126,9 @@ public:
     /**
      * @brief 获取当前配置
      * 
-     * @return const MqttConfig& 当前配置的引用
+     * @return MqttConfig 当前配置的副本
      */
-    [[nodiscard]] const MqttConfig& getConfig() const noexcept;
+    [[nodiscard]] MqttConfig getConfig() const;
     
     // ========== 连接管理 ==========
     
@@ -258,9 +258,9 @@ public:
     /**
      * @brief 获取监控指标
      * 
-     * @return const MqttMetrics& 监控指标的常量引用
+     * @return MqttMetrics 监控指标的快照
      */
-    [[nodiscard]] const MqttMetrics& getMetrics() const noexcept;
+    [[nodiscard]] MqttMetrics getMetrics() const;
     
     /**
      * @brief 重置监控指标
@@ -322,6 +322,7 @@ private:
     
     // 线程安全
     mutable std::mutex mutex_;
+    mutable std::recursive_mutex operationMutex_;
     
     /**
      * @brief 更新连接指标（内部方法）

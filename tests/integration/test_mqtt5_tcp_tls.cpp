@@ -15,6 +15,7 @@
 #include <vector>
 #include <string>
 #include <map>
+#include "test_environment.h"
 #include "mqtt_client/embedded_mqtt_client.h"
 #include "mqtt_client/config/config.h"
 #include "mqtt_client/config/config_manager.h"
@@ -22,12 +23,14 @@
 using namespace mqtt_client;
 
 // 测试服务器配置
-const std::string TEST_SERVER_HOST = "mqtt-d8o3b4va-nj-public.mqtt.tencenttdmq.com";
-constexpr int TEST_TCP_PORT = 1883;
-constexpr int TEST_TLS_PORT = 8883;
-const std::string TEST_USERNAME = "ply_user";
-const std::string TEST_PASSWORD = "sk73ca48bdd3d58cf1";
-const std::string TEST_TOPIC = "testtopic/hello";
+const std::string TEST_SERVER_HOST = mqtt_test::envOr("MQTT_TEST_HOST", "127.0.0.1");
+const int TEST_TCP_PORT = mqtt_test::envPort("MQTT_TEST_TCP_PORT", 1883);
+const int TEST_TLS_PORT = mqtt_test::envPort("MQTT_TEST_TLS_PORT", 8883);
+const std::string TEST_USERNAME = mqtt_test::envOr("MQTT_TEST_USERNAME", "");
+const std::string TEST_PASSWORD = mqtt_test::envOr("MQTT_TEST_PASSWORD", "");
+const std::string TEST_TOPIC = mqtt_test::envOr("MQTT_TEST_TOPIC", "libmqtt-client/test");
+const std::string TEST_CA_CERTIFICATE = mqtt_test::envOr("MQTT_TEST_CA_CERT", "");
+const bool TEST_TLS_ENABLED = mqtt_test::envBool("MQTT_TEST_ENABLE_TLS", true);
 
 // 消息接收状态
 struct MessageState {
@@ -43,7 +46,6 @@ struct MessageState {
         std::lock_guard<std::mutex> lock(mutex);
         receivedMessages.clear();
         messageReceived = false;
-        expectedCount = 0;
         receivedCount = 0;
     }
 };
@@ -71,7 +73,8 @@ MqttConfig createTlsConfig() {
     config.server.port = TEST_TLS_PORT;
     config.server.useSSL = true;
     config.security.enableTLS = true;
-    config.security.verifyCertificate = false;  // 不验证证书
+    config.security.verifyCertificate = !TEST_CA_CERTIFICATE.empty();
+    config.security.caCertificatePath = TEST_CA_CERTIFICATE;
     config.basic.clientId = "mqtt5_tls_test_" + std::to_string(std::time(nullptr));
     config.server.connectTimeout = 30;  // TLS连接需要更长时间
     return config;
@@ -146,7 +149,7 @@ bool testTcpQoS(QoS qos) {
                                              qos);
     if (!subscribeResult.success) {
         std::cerr << "    ✗ 订阅失败: " << subscribeResult.error.message << std::endl;
-        client.disconnect();
+        (void)client.disconnect();
         return false;
     }
     
@@ -163,7 +166,7 @@ bool testTcpQoS(QoS qos) {
     auto publishResult = client.publish(TEST_TOPIC, testMessage, qos);
     if (!publishResult.success) {
         std::cerr << "    ✗ 发布失败: " << publishResult.error.message << std::endl;
-        client.disconnect();
+        (void)client.disconnect();
         return false;
     }
     
@@ -192,7 +195,7 @@ bool testTcpQoS(QoS qos) {
             auto elapsed = std::chrono::duration_cast<std::chrono::milliseconds>(
                 receiveTime - publishStartTime).count();
             std::cout << "    ✓ " << qosToString(qos) << " 测试通过 (耗时: " << elapsed << " ms)" << std::endl;
-            client.disconnect();
+            (void)client.disconnect();
             return true;
         } else {
             std::cout << "    ✗ 消息内容验证失败" << std::endl;
@@ -205,12 +208,12 @@ bool testTcpQoS(QoS qos) {
                     std::cout << "    实际消息: Topic=" << msg.first << ", Payload=" << msg.second << std::endl;
                 }
             }
-            client.disconnect();
+            (void)client.disconnect();
             return false;
         }
     } else {
         std::cout << "    ✗ 消息接收超时" << std::endl;
-        client.disconnect();
+        (void)client.disconnect();
         return false;
     }
 }
@@ -253,7 +256,7 @@ bool testTlsQoS(QoS qos) {
                                              qos);
     if (!subscribeResult.success) {
         std::cerr << "    ✗ 订阅失败: " << subscribeResult.error.message << std::endl;
-        client.disconnect();
+        (void)client.disconnect();
         return false;
     }
     
@@ -270,7 +273,7 @@ bool testTlsQoS(QoS qos) {
     auto publishResult = client.publish(TEST_TOPIC, testMessage, qos);
     if (!publishResult.success) {
         std::cerr << "    ✗ 发布失败: " << publishResult.error.message << std::endl;
-        client.disconnect();
+        (void)client.disconnect();
         return false;
     }
     
@@ -299,7 +302,7 @@ bool testTlsQoS(QoS qos) {
             auto elapsed = std::chrono::duration_cast<std::chrono::milliseconds>(
                 receiveTime - publishStartTime).count();
             std::cout << "    ✓ " << qosToString(qos) << " 测试通过 (耗时: " << elapsed << " ms)" << std::endl;
-            client.disconnect();
+            (void)client.disconnect();
             return true;
         } else {
             std::cout << "    ✗ 消息内容验证失败" << std::endl;
@@ -312,12 +315,12 @@ bool testTlsQoS(QoS qos) {
                     std::cout << "    实际消息: Topic=" << msg.first << ", Payload=" << msg.second << std::endl;
                 }
             }
-            client.disconnect();
+            (void)client.disconnect();
             return false;
         }
     } else {
         std::cout << "    ✗ 消息接收超时" << std::endl;
-        client.disconnect();
+        (void)client.disconnect();
         return false;
     }
 }
@@ -439,16 +442,16 @@ int main(int /*argc*/, char* /*argv*/[]) {
         tcpResults = TcpTestResults{false, false, false};
     }
     
-    // 等待一下再测试TLS
-    std::this_thread::sleep_for(std::chrono::seconds(2));
-    
     // 测试TLS连接
     TlsTestResults tlsResults;
-    try {
-        tlsResults = testTlsConnection();
-    } catch (const std::exception& e) {
-        std::cerr << "TLS测试异常: " << e.what() << std::endl;
-        tlsResults = TlsTestResults{false, false, false};
+    if (TEST_TLS_ENABLED) {
+        std::this_thread::sleep_for(std::chrono::seconds(2));
+        try {
+            tlsResults = testTlsConnection();
+        } catch (const std::exception& e) {
+            std::cerr << "TLS测试异常: " << e.what() << std::endl;
+            tlsResults = TlsTestResults{false, false, false};
+        }
     }
     
     // 输出测试结果总结
@@ -456,16 +459,21 @@ int main(int /*argc*/, char* /*argv*/[]) {
     std::cout << "测试结果总结" << std::endl;
     std::cout << "========================================" << std::endl;
     bool tcpAllPass = tcpResults.qos0 && tcpResults.qos1 && tcpResults.qos2;
-    bool tlsAllPass = tlsResults.qos0 && tlsResults.qos1 && tlsResults.qos2;
+    const bool tlsAllPass = !TEST_TLS_ENABLED ||
+        (tlsResults.qos0 && tlsResults.qos1 && tlsResults.qos2);
     
     std::cout << "MQTT 5.0 TCP 测试: " << (tcpAllPass ? "✓ 通过" : "✗ 失败") << std::endl;
     std::cout << "  - QoS 0: " << (tcpResults.qos0 ? "✓ 通过" : "✗ 失败") << std::endl;
     std::cout << "  - QoS 1: " << (tcpResults.qos1 ? "✓ 通过" : "✗ 失败") << std::endl;
     std::cout << "  - QoS 2: " << (tcpResults.qos2 ? "✓ 通过" : "✗ 失败") << std::endl;
-    std::cout << "MQTT 5.0 TLS 测试: " << (tlsAllPass ? "✓ 通过" : "✗ 失败") << std::endl;
-    std::cout << "  - QoS 0: " << (tlsResults.qos0 ? "✓ 通过" : "✗ 失败") << std::endl;
-    std::cout << "  - QoS 1: " << (tlsResults.qos1 ? "✓ 通过" : "✗ 失败") << std::endl;
-    std::cout << "  - QoS 2: " << (tlsResults.qos2 ? "✓ 通过" : "✗ 失败") << std::endl;
+    if (TEST_TLS_ENABLED) {
+        std::cout << "MQTT 5.0 TLS 测试: " << (tlsAllPass ? "✓ 通过" : "✗ 失败") << std::endl;
+        std::cout << "  - QoS 0: " << (tlsResults.qos0 ? "✓ 通过" : "✗ 失败") << std::endl;
+        std::cout << "  - QoS 1: " << (tlsResults.qos1 ? "✓ 通过" : "✗ 失败") << std::endl;
+        std::cout << "  - QoS 2: " << (tlsResults.qos2 ? "✓ 通过" : "✗ 失败") << std::endl;
+    } else {
+        std::cout << "MQTT 5.0 TLS 测试: - 已跳过" << std::endl;
+    }
     std::cout << "========================================" << std::endl;
     
     if (tcpAllPass && tlsAllPass) {

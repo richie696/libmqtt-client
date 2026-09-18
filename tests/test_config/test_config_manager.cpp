@@ -7,6 +7,7 @@
 #include "mqtt_client/config/config_manager.h"
 #include "mqtt_client/config/config.h"
 #include <fstream>
+#include <memory>
 #if __has_include(<filesystem>)
 #include <filesystem>
 namespace fs = std::filesystem;
@@ -68,6 +69,21 @@ TEST_F(ConfigManagerTest, ValidateConfig) {
     EXPECT_FALSE(invalidResult);
 }
 
+TEST_F(ConfigManagerTest, TlsValidationAlsoAppliesToUseSsl) {
+    auto config = MqttConfigManager::getDefaultConfig();
+    config.server.useSSL = true;
+    config.security.enableTLS = false;
+    config.security.verifyCertificate = true;
+
+    EXPECT_FALSE(MqttConfigManager::validate(config));
+
+    config.security.caCertificatePath = "/path/to/ca.pem";
+    EXPECT_TRUE(MqttConfigManager::validate(config));
+
+    config.security.clientCertificatePath = "/path/to/client.pem";
+    EXPECT_FALSE(MqttConfigManager::validate(config));
+}
+
 // 测试从JSON字符串加载配置
 TEST_F(ConfigManagerTest, LoadFromJson) {
     auto& manager = MqttConfigManager::getInstance();
@@ -115,7 +131,7 @@ TEST_F(ConfigManagerTest, LoadFromFile) {
     auto config = manager.getDefaultConfig();
     config.basic.clientId = "test_load_client";
     config.server.host = "load.test.com";
-    manager.saveToFile(config, testConfigFile_);
+    ASSERT_TRUE(manager.saveToFile(config, testConfigFile_));
     
     // 然后加载
     auto result = manager.loadFromFile(testConfigFile_);
@@ -148,24 +164,28 @@ TEST_F(ConfigManagerTest, MergeConfig) {
 TEST_F(ConfigManagerTest, UpdateCallback) {
     auto& manager = MqttConfigManager::getInstance();
     
-    bool callbackCalled = false;
-    MqttConfig receivedConfig;
+    struct CallbackState {
+        bool called = false;
+        MqttConfig receivedConfig;
+    };
+    auto callbackState = std::make_shared<CallbackState>();
+
+    auto config = manager.getDefaultConfig();
+    config.logging.level = LogLevel::INFO;
+    manager.setCurrentConfig(config);
     
-    manager.registerUpdateCallback([&](const MqttConfig& config) {
-        callbackCalled = true;
-        receivedConfig = config;
-        // 不要在回调中调用需要锁的方法，避免死锁
+    manager.registerUpdateCallback([callbackState](const MqttConfig& updatedConfig) {
+        callbackState->called = true;
+        callbackState->receivedConfig = updatedConfig;
     });
     
     // 执行热更新（只更新支持热更新的配置项）
-    auto config = manager.getDefaultConfig();
     config.logging.level = LogLevel::DEBUG;  // 日志级别支持热更新
     auto result = manager.hotUpdate(config);
     
     // 验证热更新成功
     EXPECT_TRUE(result);
     
-    // 回调应该被调用（如果配置确实改变了）
-    // 注意：由于是同步调用，回调应该立即执行
-    EXPECT_TRUE(callbackCalled || !callbackCalled);  // 回调可能执行也可能不执行（取决于配置是否改变）
+    EXPECT_TRUE(callbackState->called);
+    EXPECT_EQ(callbackState->receivedConfig.logging.level, LogLevel::DEBUG);
 }

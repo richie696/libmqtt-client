@@ -57,8 +57,8 @@ TEST_F(MessageManagerTest, PublishAsync) {
         false
     );
     
-    // 消息应该成功加入队列（即使未连接）
-    EXPECT_TRUE(result.success || !result.success);  // 取决于实现
+    ASSERT_TRUE(result.success);
+    EXPECT_EQ(messageManager_->getQueueSize(), 1U);
 }
 
 // 测试发布消息（同步）
@@ -71,8 +71,8 @@ TEST_F(MessageManagerTest, PublishSync) {
         1000  // 1秒超时
     );
     
-    // 同步发布结果取决于连接状态
-    EXPECT_TRUE(true);  // 测试通过
+    ASSERT_FALSE(result.success);
+    EXPECT_EQ(result.error.code, MqttErrorCode::NOT_CONNECTED);
 }
 
 // 测试获取队列大小
@@ -80,19 +80,19 @@ TEST_F(MessageManagerTest, GetQueueSize) {
     size_t initialSize = messageManager_->getQueueSize();
     
     // 发布一些消息
-    messageManager_->publish("test/topic1", "payload1", QoS::QOS_1);
-    messageManager_->publish("test/topic2", "payload2", QoS::QOS_1);
+    ASSERT_TRUE(messageManager_->publish("test/topic1", "payload1", QoS::QOS_1));
+    ASSERT_TRUE(messageManager_->publish("test/topic2", "payload2", QoS::QOS_1));
     
     // 队列大小可能增加（取决于实现）
     size_t newSize = messageManager_->getQueueSize();
-    EXPECT_GE(newSize, initialSize);
+    EXPECT_EQ(newSize, initialSize + 2);
 }
 
 // 测试清空队列
 TEST_F(MessageManagerTest, ClearQueue) {
     // 先添加一些消息
-    messageManager_->publish("test/topic1", "payload1", QoS::QOS_1);
-    messageManager_->publish("test/topic2", "payload2", QoS::QOS_1);
+    ASSERT_TRUE(messageManager_->publish("test/topic1", "payload1", QoS::QOS_1));
+    ASSERT_TRUE(messageManager_->publish("test/topic2", "payload2", QoS::QOS_1));
     
     // 清空队列
     messageManager_->clearQueue();
@@ -115,15 +115,16 @@ TEST_F(MessageManagerTest, GetStats) {
 TEST_F(MessageManagerTest, DifferentQoSLevels) {
     // QoS 0
     auto result0 = messageManager_->publish("test/qos0", "payload", QoS::QOS_0);
-    EXPECT_TRUE(result0.success || !result0.success);
+    EXPECT_TRUE(result0.success);
     
     // QoS 1
     auto result1 = messageManager_->publish("test/qos1", "payload", QoS::QOS_1);
-    EXPECT_TRUE(result1.success || !result1.success);
+    EXPECT_TRUE(result1.success);
     
     // QoS 2
     auto result2 = messageManager_->publish("test/qos2", "payload", QoS::QOS_2);
-    EXPECT_TRUE(result2.success || !result2.success);
+    EXPECT_TRUE(result2.success);
+    EXPECT_EQ(messageManager_->getQueueSize(), 3U);
 }
 
 // 测试保留消息
@@ -135,7 +136,7 @@ TEST_F(MessageManagerTest, RetainedMessage) {
         true  // retained
     );
     
-    EXPECT_TRUE(result.success || !result.success);
+    EXPECT_TRUE(result.success);
 }
 
 // 测试消息优先级
@@ -158,6 +159,7 @@ TEST_F(MessageManagerTest, MessagePriority) {
         9  // 高优先级
     );
     
-    EXPECT_TRUE(resultLow.success || !resultLow.success);
-    EXPECT_TRUE(resultHigh.success || !resultHigh.success);
+    EXPECT_TRUE(resultLow.success);
+    EXPECT_TRUE(resultHigh.success);
+    EXPECT_EQ(messageManager_->getQueueSize(), 2U);
 }

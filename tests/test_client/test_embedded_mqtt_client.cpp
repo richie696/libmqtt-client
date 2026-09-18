@@ -22,7 +22,7 @@ protected:
     
     void TearDown() override {
         if (client_ && client_->isConnected()) {
-            client_->disconnect();
+            (void)client_->disconnect();
         }
         client_.reset();
     }
@@ -61,31 +61,24 @@ TEST_F(EmbeddedMqttClientTest, DelayedInitialization) {
     EXPECT_FALSE(client_->isInitialized());
     
     auto result = client_->initialize(config_);
-    EXPECT_TRUE(result.success || !result.success);  // 取决于实现
-    
-    if (result) {
-        EXPECT_TRUE(client_->isInitialized());
-    }
+    EXPECT_EQ(result.success, client_->isInitialized());
 }
 
 // 测试清理
 TEST_F(EmbeddedMqttClientTest, Cleanup) {
     client_ = std::make_unique<EmbeddedMqttClient>(config_);
     
-    if (client_->isInitialized()) {
-        client_->cleanup();
-        EXPECT_FALSE(client_->isInitialized());
-    }
+    client_->cleanup();
+    EXPECT_FALSE(client_->isInitialized());
+    EXPECT_FALSE(client_->isConnected());
 }
 
 // 测试获取配置
 TEST_F(EmbeddedMqttClientTest, GetConfig) {
     client_ = std::make_unique<EmbeddedMqttClient>(config_);
     
-    if (client_->isInitialized()) {
-        const auto& retrievedConfig = client_->getConfig();
-        EXPECT_EQ(retrievedConfig.basic.clientId, config_.basic.clientId);
-    }
+    const auto retrievedConfig = client_->getConfig();
+    EXPECT_EQ(retrievedConfig.basic.clientId, config_.basic.clientId);
 }
 
 // 测试连接状态查询
@@ -105,82 +98,57 @@ TEST_F(EmbeddedMqttClientTest, GetState) {
 
 // 测试发布消息
 TEST_F(EmbeddedMqttClientTest, Publish) {
-    client_ = std::make_unique<EmbeddedMqttClient>(config_);
-    
-    if (client_->isInitialized()) {
-        auto result = client_->publish("test/topic", "test payload", QoS::QOS_1);
-        // 发布结果取决于连接状态
-        EXPECT_TRUE(result.success || !result.success);
-    }
+    client_ = std::make_unique<EmbeddedMqttClient>();
+    const auto result = client_->publish("test/topic", "test payload", QoS::QOS_1);
+    ASSERT_FALSE(result.success);
+    EXPECT_EQ(result.error.code, MqttErrorCode::NOT_INITIALIZED);
 }
 
 // 测试订阅主题
 TEST_F(EmbeddedMqttClientTest, Subscribe) {
-    client_ = std::make_unique<EmbeddedMqttClient>(config_);
-    
-    if (client_->isInitialized()) {
-        MessageCallback callback = [](std::string_view, std::string_view, const MqttProperties&) {};
-        
-        auto result = client_->subscribe("test/topic", callback, QoS::QOS_1);
-        EXPECT_TRUE(result.success || !result.success);
-    }
+    client_ = std::make_unique<EmbeddedMqttClient>();
+    MessageCallback callback = [](std::string_view, std::string_view, const MqttProperties&) {};
+    const auto result = client_->subscribe("test/topic", callback, QoS::QOS_1);
+    ASSERT_FALSE(result.success);
+    EXPECT_EQ(result.error.code, MqttErrorCode::NOT_INITIALIZED);
 }
 
 // 测试取消订阅
 TEST_F(EmbeddedMqttClientTest, Unsubscribe) {
-    client_ = std::make_unique<EmbeddedMqttClient>(config_);
-    
-    if (client_->isInitialized()) {
-        auto result = client_->unsubscribe("test/topic");
-        EXPECT_TRUE(result.success || !result.success);
-    }
+    client_ = std::make_unique<EmbeddedMqttClient>();
+    const auto result = client_->unsubscribe("test/topic");
+    ASSERT_FALSE(result.success);
+    EXPECT_EQ(result.error.code, MqttErrorCode::NOT_INITIALIZED);
 }
 
 // 测试获取已订阅主题列表
 TEST_F(EmbeddedMqttClientTest, GetSubscribedTopics) {
-    client_ = std::make_unique<EmbeddedMqttClient>(config_);
-    
-    if (client_->isInitialized()) {
-        auto topics = client_->getSubscribedTopics();
-        EXPECT_TRUE(topics.empty() || !topics.empty());  // 取决于订阅状态
-    }
+    client_ = std::make_unique<EmbeddedMqttClient>();
+    EXPECT_TRUE(client_->getSubscribedTopics().empty());
 }
 
 // 测试设置连接回调
 TEST_F(EmbeddedMqttClientTest, SetConnectionCallback) {
     client_ = std::make_unique<EmbeddedMqttClient>(config_);
     
-    bool callbackCalled = false;
-    ConnectionCallback callback = [&](ConnectionState state, const std::string& reason) {
-        callbackCalled = true;
-    };
-    
-    client_->setConnectionCallback(callback);
-    EXPECT_TRUE(true);  // 回调已设置
+    ConnectionCallback callback = [](ConnectionState, const std::string&) {};
+    EXPECT_NO_THROW(client_->setConnectionCallback(callback));
 }
 
 // 测试设置错误回调
 TEST_F(EmbeddedMqttClientTest, SetErrorCallback) {
     client_ = std::make_unique<EmbeddedMqttClient>(config_);
     
-    bool callbackCalled = false;
-    ErrorCallback callback = [&](const MqttError& /*error*/) {
-        callbackCalled = true;
-    };
-    
-    client_->setErrorCallback(callback);
-    EXPECT_TRUE(true);  // 回调已设置
+    ErrorCallback callback = [](const MqttError&) {};
+    EXPECT_NO_THROW(client_->setErrorCallback(callback));
 }
 
 // 测试配置更新
 TEST_F(EmbeddedMqttClientTest, UpdateConfig) {
-    client_ = std::make_unique<EmbeddedMqttClient>(config_);
-    
-    if (client_->isInitialized()) {
-        MqttConfig newConfig = config_;
-        newConfig.basic.clientId = "updated_client";
-        
-        auto result = client_->updateConfig(newConfig);
-        EXPECT_TRUE(result.success || !result.success);
-    }
+    client_ = std::make_unique<EmbeddedMqttClient>();
+    MqttConfig newConfig = config_;
+    newConfig.basic.clientId = "updated_client";
+    const auto result = client_->updateConfig(newConfig);
+    ASSERT_FALSE(result.success);
+    EXPECT_EQ(result.error.code, MqttErrorCode::NOT_INITIALIZED);
 }

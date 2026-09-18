@@ -1,0 +1,24 @@
+@PACKAGE_INIT@
+
+include(CMakeFindDependencyMacro)
+
+if(NOT @BUILD_SHARED_LIBS@)
+    if(@PLATFORM_LINUX@)
+        find_dependency(Threads)
+    endif()
+    find_dependency(fmt CONFIG)
+    if(@BUNDLED_WOLFMQTT_CONFIGURED@)
+        # wolfMQTT's exported target refers to wolfssl::wolfssl but its
+        # generated config does not discover that dependency itself.
+        find_dependency(wolfssl CONFIG)
+        find_dependency(wolfmqtt CONFIG)
+    endif()
+    if(NOT @USE_FETCHCONTENT@)
+        find_dependency(nlohmann_json CONFIG)
+    endif()
+    if(@ENABLE_YAML@)
+        find_dependency(yaml-cpp CONFIG)
+    endif()
+endif()
+
+include("${CMAKE_CURRENT_LIST_DIR}/mqtt_clientTargets.cmake")

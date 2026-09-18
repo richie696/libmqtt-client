@@ -134,7 +134,7 @@ public:
      * 
      * @return const MqttConfig& 当前配置的引用
      */
-    const MqttConfig& getCurrentConfig() const;
+    [[nodiscard]] MqttConfig getCurrentConfig() const;
     
     /**
      * @brief 设置当前配置

@@ -65,16 +65,17 @@ TEST_F(ConnectionManagerTest, SetCallbacks) {
         onConnectedCalled = true;
     });
     
-    manager_->setOnConnectionLost([&](const std::string& reason) {
+    manager_->setOnConnectionLost([&](const std::string&) {
         onConnectionLostCalled = true;
     });
     
-    manager_->setOnConnectFailure([&](const std::string& reason) {
+    manager_->setOnConnectFailure([&](const std::string&) {
         onConnectFailureCalled = true;
     });
     
-    // 回调已设置（实际调用需要连接操作）
-    EXPECT_TRUE(true);
+    EXPECT_FALSE(onConnectedCalled);
+    EXPECT_FALSE(onConnectionLostCalled);
+    EXPECT_FALSE(onConnectFailureCalled);
 }
 
 // 测试重连尝试次数
@@ -85,8 +86,8 @@ TEST_F(ConnectionManagerTest, ReconnectCount) {
 // 测试断开连接（未连接状态）
 TEST_F(ConnectionManagerTest, DisconnectWhenNotConnected) {
     auto result = manager_->disconnect();
-    // 断开未连接的连接应该成功
-    EXPECT_TRUE(result.success || !result.success);  // 取决于实现
+    EXPECT_TRUE(result.success);
+    EXPECT_EQ(manager_->getState(), ConnectionState::DISCONNECTED);
 }
 
 // 测试状态转换
@@ -103,5 +104,5 @@ TEST_F(ConnectionManagerTest, Lifecycle) {
     
     // 析构应该正常
     newManager.reset();
-    EXPECT_TRUE(true);
+    EXPECT_EQ(newManager, nullptr);
 }

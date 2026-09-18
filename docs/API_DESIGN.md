@@ -998,26 +998,29 @@ enum class MqttErrorCode {
 #include "mqtt_client/embedded_mqtt_client.h"
 
 int main() {
+    using namespace mqtt_client;
+
     // 创建配置
     MqttConfig config;
-    config.basic.host = "mqtt.example.com";
-    config.basic.port = 1883;
+    config.server.host = "mqtt.example.com";
+    config.server.port = 1883;
     config.basic.clientId = "my_client";
-    config.basic.version = MqttProtocolVersion::V5_0;
+    config.basic.version = "5.0";
     
     // 创建客户端
-    mqtt_client::EmbeddedMqttClient client(config);
+    EmbeddedMqttClient client(config);
     
     // 连接
     auto result = client.connect();
-    if (!result.success) {
+    if (!result) {
         std::cerr << "连接失败: " << result.error.message << std::endl;
         return 1;
     }
     
     // 订阅
     client.subscribe("device/+/status", 
-        [](const std::string& topic, const std::string& payload) {
+        [](std::string_view topic, std::string_view payload,
+           const MqttProperties&) {
             std::cout << "收到消息: " << topic << " -> " << payload << std::endl;
         },
         QoS::QOS_1
@@ -1042,15 +1045,17 @@ int main() {
 #include "mqtt_client/embedded_mqtt_client.h"
 
 int main() {
+    using namespace mqtt_client;
+
     // 创建客户端（延迟初始化）
-    mqtt_client::EmbeddedMqttClient client;
+    EmbeddedMqttClient client;
     
     // 从服务器获取配置（模拟）
     MqttConfig config = fetchConfigFromServer();
     
     // 初始化
     auto result = client.initialize(config);
-    if (!result.success) {
+    if (!result) {
         std::cerr << "初始化失败: " << result.error.message << std::endl;
         return 1;
     }
@@ -1070,7 +1075,9 @@ int main() {
 #include "mqtt_client/embedded_mqtt_client.h"
 
 int main() {
-    mqtt_client::EmbeddedMqttClient client(config);
+    using namespace mqtt_client;
+
+    EmbeddedMqttClient client(config);
     
     // 设置错误回调
     client.setErrorCallback([](const MqttError& error) {
@@ -1078,8 +1085,8 @@ int main() {
     });
     
     // 设置连接回调
-    client.setConnectionCallback([](bool connected, const std::string& reason) {
-        if (connected) {
+    client.setConnectionCallback([](ConnectionState state, const std::string& reason) {
+        if (state == ConnectionState::CONNECTED) {
             std::cout << "已连接" << std::endl;
         } else {
             std::cout << "已断开: " << reason << std::endl;
@@ -1103,12 +1110,14 @@ int main() {
 #include "mqtt_client/embedded_mqtt_client.h"
 
 int main() {
-    mqtt_client::EmbeddedMqttClient client(config);
+    using namespace mqtt_client;
+
+    EmbeddedMqttClient client(config);
     client.connect();
     
     // 定期获取指标
     while (true) {
-        const auto& metrics = client.getMetrics();
+        const auto metrics = client.getMetrics();
         
         std::cout << "连接数: " << metrics.connection.totalConnections << std::endl;
         std::cout << "发送消息: " << metrics.message.messagesSent << std::endl;
@@ -1121,6 +1130,5 @@ int main() {
     return 0;
 }
 ```
-
 
 

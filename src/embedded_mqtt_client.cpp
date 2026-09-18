@@ -23,6 +23,7 @@
 #include <mutex>
 #ifdef WOLFMQTT_ENABLED
 #include <wolfmqtt/mqtt_types.h>
+#include <wolfmqtt/version.h>
 #endif
 
 namespace mqtt_client {
@@ -78,12 +79,12 @@ namespace {
 
         // ========== 编译器信息 ==========
         info += "编译器信息:\n";
-        #ifdef __GNUC__
-            info += fmt::format("  编译器: GCC {}.{}.{}\n", __GNUC__, __GNUC_MINOR__, __GNUC_PATCHLEVEL__);
+        #ifdef __clang__
+            info += fmt::format("  编译器: Clang {}.{}.{}\n", __clang_major__, __clang_minor__, __clang_patchlevel__);
         #elif defined(_MSC_VER)
             info += fmt::format("  编译器: MSVC {}\n", _MSC_VER);
-        #elif defined(__clang__)
-            info += fmt::format("  编译器: Clang {}.{}.{}\n", __clang_major__, __clang_minor__, __clang_patchlevel__);
+        #elif defined(__GNUC__)
+            info += fmt::format("  编译器: GCC {}.{}.{}\n", __GNUC__, __GNUC_MINOR__, __GNUC_PATCHLEVEL__);
         #else
             info += "  编译器: 未知\n";
         #endif
@@ -123,10 +124,8 @@ namespace {
         // ========== 依赖版本信息 ==========
         info += "依赖版本:\n";
         #ifdef WOLFMQTT_ENABLED
-            // wolfMQTT版本信息（如果可用）
-            #ifdef WOLFMQTT_VERSION_MAJOR
-                info += fmt::format("  wolfMQTT: {}.{}.{}\n",
-                    WOLFMQTT_VERSION_MAJOR, WOLFMQTT_VERSION_MINOR, WOLFMQTT_VERSION_PATCH);
+            #ifdef LIBWOLFMQTT_VERSION_STRING
+                info += fmt::format("  wolfMQTT: {}\n", LIBWOLFMQTT_VERSION_STRING);
             #else
                 info += "  wolfMQTT: 已启用（版本未知）\n";
             #endif
@@ -150,7 +149,7 @@ namespace {
 
         // ========== 线程信息 ==========
         info += "线程支持:\n";
-        #ifdef __cpp_lib_thread
+        #if __cplusplus >= 201103L
             info += "  ✓ C++标准线程库: 支持\n";
         #else
             info += "  - C++标准线程库: 不支持\n";
@@ -192,6 +191,7 @@ EmbeddedMqttClient::~EmbeddedMqttClient() {
 }
 
 Result<bool> EmbeddedMqttClient::initialize(const MqttConfig& config) {
+    std::lock_guard operationLock(operationMutex_);
     std::lock_guard lock(mutex_);
 
     // 检查是否已初始化
@@ -232,84 +232,111 @@ bool EmbeddedMqttClient::isInitialized() const noexcept {
 }
 
 void EmbeddedMqttClient::cleanup() {
-    std::lock_guard lock(mutex_);
-
-    if (!initialized_.load()) {
-        return;
+    std::lock_guard operationLock(operationMutex_);
+    {
+        std::lock_guard lock(mutex_);
+        if (!initialized_.exchange(false)) {
+            return;
+        }
     }
 
-    // 断开连接
-    if (connected_.load()) {
-        if (const auto result = disconnect(); !result.success) {
-            LOG_WARN("执行连接断开失败，但不影响后续执行。");
-        }
+    // 阻塞式清理不能在持有客户端锁时执行，否则断开回调或接收线程
+    // 重入客户端 API 时会造成自锁。
+    if (const auto result = disconnect(); !result.success) {
+        LOG_WARN("执行连接断开失败，但不影响后续执行。");
     }
 
     // 清理子组件
     cleanupComponents();
 
-    initialized_.store(false);
+    connected_.store(false);
 
     LOG_INFO("客户端清理完成");
 }
 
 Result<bool> EmbeddedMqttClient::updateConfig(const MqttConfig& config) {
-    std::lock_guard lock(mutex_);
-
-    if (!initialized_.load()) {
-        return Result<bool>::Failure(
-            MqttError(MqttErrorCode::NOT_INITIALIZED,
-                     "客户端未初始化"));
+    std::lock_guard operationLock(operationMutex_);
+    {
+        std::lock_guard lock(mutex_);
+        if (!initialized_.load()) {
+            return Result<bool>::Failure(
+                MqttError(MqttErrorCode::NOT_INITIALIZED,
+                          "客户端未初始化"));
+        }
+        if (connected_.load()) {
+            return Result<bool>::Failure(
+                MqttError(MqttErrorCode::INVALID_STATE,
+                          "更新配置前必须先断开连接"));
+        }
     }
 
-    // 验证配置
-    // 使用 if 初始化语句，限制变量作用域
     if (auto validation = MqttConfigManager::validate(config); !validation) {
         return Result<bool>::Failure(
             MqttError(MqttErrorCode::INVALID_CONFIG,
                      fmt::format("配置验证失败: {}", validation.error.message)));
     }
 
-    auto& configManager = MqttConfigManager::getInstance();
-    // 使用配置管理器进行热更新
-    if (auto hotUpdateResult = configManager.hotUpdate(config); !hotUpdateResult) {
-        return hotUpdateResult;
+    MqttConfig previousConfig;
+    {
+        std::lock_guard lock(mutex_);
+        previousConfig = config_;
     }
 
-    // 更新本地配置
-    config_ = config;
+    cleanupComponents();
+    {
+        std::lock_guard lock(mutex_);
+        config_ = config;
+    }
+
+    if (auto initResult = initializeComponents(); !initResult) {
+        cleanupComponents();
+        {
+            std::lock_guard lock(mutex_);
+            config_ = previousConfig;
+        }
+        if (auto restoreResult = initializeComponents(); restoreResult) {
+            setupCallbacks();
+        } else {
+            initialized_.store(false);
+            LOG_ERROR("新配置初始化失败，且恢复旧配置也失败: " + restoreResult.error.message);
+        }
+        return initResult;
+    }
+
+    setupCallbacks();
 
     LOG_INFO("配置更新成功");
 
     return Result<bool>::Success(true);
 }
 
-const MqttConfig& EmbeddedMqttClient::getConfig() const noexcept {
+MqttConfig EmbeddedMqttClient::getConfig() const {
     std::lock_guard lock(mutex_);
     return config_;
 }
 
 Result<bool> EmbeddedMqttClient::connect() {
-    std::lock_guard lock(mutex_);
-
-    if (!initialized_.load()) {
-        return Result<bool>::Failure(
-            MqttError(MqttErrorCode::NOT_INITIALIZED,
-                     "客户端未初始化"));
+    std::lock_guard operationLock(operationMutex_);
+    MqttConnectionManager* connectionManager = nullptr;
+    {
+        std::lock_guard lock(mutex_);
+        if (!initialized_.load()) {
+            return Result<bool>::Failure(
+                MqttError(MqttErrorCode::NOT_INITIALIZED,
+                         "客户端未初始化"));
+        }
+        if (connected_.load()) {
+            return Result<bool>::Success(true);
+        }
+        connectionManager = connectionManager_.get();
+        if (!connectionManager) {
+            return Result<bool>::Failure(
+                MqttError(MqttErrorCode::NOT_INITIALIZED,
+                         "连接管理器未初始化"));
+        }
     }
 
-    if (connected_.load()) {
-        return Result<bool>::Success(true);
-    }
-
-    // 通过连接管理器连接
-    if (!connectionManager_) {
-        return Result<bool>::Failure(
-            MqttError(MqttErrorCode::NOT_INITIALIZED,
-                     "连接管理器未初始化"));
-    }
-
-    auto result = connectionManager_->connect();
+    auto result = connectionManager->connect();
     const bool isReconnect = reconnectManager_ && reconnectManager_->isReconnecting();
     
     // 更新连接指标
@@ -350,11 +377,8 @@ Result<bool> EmbeddedMqttClient::connect() {
 }
 
 Result<bool> EmbeddedMqttClient::disconnect(bool /* force */) {
-    std::lock_guard lock(mutex_);
-
-    if (!connected_.load()) {
-        return Result<bool>::Success(true);
-    }
+    std::lock_guard operationLock(operationMutex_);
+    const bool wasConnected = connected_.load();
 
     // 停止监控组件
     if (networkMonitor_) {
@@ -367,6 +391,10 @@ Result<bool> EmbeddedMqttClient::disconnect(bool /* force */) {
         heartbeatManager_->stop();
     }
 
+    if (wasConnected && messageManager_) {
+        messageManager_->flush();
+    }
+
     // 停止重连
     if (reconnectManager_) {
         reconnectManager_->stopReconnect();
@@ -375,11 +403,11 @@ Result<bool> EmbeddedMqttClient::disconnect(bool /* force */) {
     // 通过连接管理器断开
     if (connectionManager_) {
         auto result = connectionManager_->disconnect();
+        connected_.store(false);
         if (result) {
-            connected_.store(false);
-            
             // 更新连接指标
-            if (config_.metrics.enableMetrics && config_.metrics.collectConnectionMetrics) {
+            if (wasConnected && config_.metrics.enableMetrics &&
+                config_.metrics.collectConnectionMetrics) {
                 std::lock_guard metricsLock(metricsMutex_);
                 metrics_.connection.disconnections++;
             }
@@ -395,7 +423,8 @@ Result<bool> EmbeddedMqttClient::disconnect(bool /* force */) {
     connected_.store(false);
     
     // 更新连接指标
-    if (config_.metrics.enableMetrics && config_.metrics.collectConnectionMetrics) {
+    if (wasConnected && config_.metrics.enableMetrics &&
+        config_.metrics.collectConnectionMetrics) {
         std::lock_guard metricsLock(metricsMutex_);
         metrics_.connection.disconnections++;
     }
@@ -404,16 +433,20 @@ Result<bool> EmbeddedMqttClient::disconnect(bool /* force */) {
 }
 
 Result<bool> EmbeddedMqttClient::reconnect() {
-    std::lock_guard lock(mutex_);
-
-    if (!initialized_.load()) {
-        return Result<bool>::Failure(
-            MqttError(MqttErrorCode::NOT_INITIALIZED,
-                     "客户端未初始化"));
+    std::lock_guard operationLock(operationMutex_);
+    MqttConnectionManager* connectionManager = nullptr;
+    {
+        std::lock_guard lock(mutex_);
+        if (!initialized_.load()) {
+            return Result<bool>::Failure(
+                MqttError(MqttErrorCode::NOT_INITIALIZED,
+                         "客户端未初始化"));
+        }
+        connectionManager = connectionManager_.get();
     }
 
-    if (connectionManager_) {
-        return connectionManager_->reconnect();
+    if (connectionManager) {
+        return connectionManager->reconnect();
     }
 
     return Result<bool>::Failure(
@@ -426,6 +459,7 @@ bool EmbeddedMqttClient::isConnected() const noexcept {
 }
 
 ConnectionState EmbeddedMqttClient::getState() const {
+    std::lock_guard operationLock(operationMutex_);
     if (connectionManager_) {
         return connectionManager_->getState();
     }
@@ -433,6 +467,7 @@ ConnectionState EmbeddedMqttClient::getState() const {
 }
 
 NetworkQuality EmbeddedMqttClient::getNetworkQuality() const {
+    std::lock_guard operationLock(operationMutex_);
     if (networkMonitor_) {
         return networkMonitor_->getQuality();
     }
@@ -443,21 +478,31 @@ Result<bool> EmbeddedMqttClient::publish(std::string_view topic,
                                         std::string_view payload,
                                         QoS qos,
                                         bool retain) {
-    std::lock_guard lock(mutex_);
-
-    if (!initialized_.load()) {
-        return Result<bool>::Failure(
-            MqttError(MqttErrorCode::NOT_INITIALIZED,
-                     "客户端未初始化"));
+    std::lock_guard operationLock(operationMutex_);
+    MqttMessageManager* messageManager = nullptr;
+    {
+        std::lock_guard lock(mutex_);
+        if (!initialized_.load()) {
+            return Result<bool>::Failure(
+                MqttError(MqttErrorCode::NOT_INITIALIZED,
+                         "客户端未初始化"));
+        }
+        messageManager = messageManager_.get();
+        if (!messageManager) {
+            return Result<bool>::Failure(
+                MqttError(MqttErrorCode::NOT_INITIALIZED,
+                         "消息管理器未初始化"));
+        }
     }
 
-    if (!messageManager_) {
-        return Result<bool>::Failure(
-            MqttError(MqttErrorCode::NOT_INITIALIZED,
-                     "消息管理器未初始化"));
+    auto result = messageManager->publish(std::string(topic), std::string(payload), qos, retain);
+    if (config_.metrics.enableMetrics && config_.metrics.collectMessageMetrics) {
+        updateMessageMetrics(true, result.success, payload.size());
     }
-
-    return messageManager_->publish(std::string(topic), std::string(payload), qos, retain);
+    if (!result.success && config_.metrics.enableMetrics) {
+        updateErrorMetrics(result.error);
+    }
+    return result;
 }
 
 Result<bool> EmbeddedMqttClient::publish(std::string_view topic,
@@ -465,15 +510,23 @@ Result<bool> EmbeddedMqttClient::publish(std::string_view topic,
                                         const MqttProperties& properties,
                                         QoS qos,
                                         bool retain) {
-    std::lock_guard lock(mutex_);
-
-    if (!initialized_.load()) {
-        return Result<bool>::Failure(
-            MqttError(MqttErrorCode::NOT_INITIALIZED,
-                     "客户端未初始化"));
+    std::lock_guard operationLock(operationMutex_);
+    MqttMessageManager* messageManager = nullptr;
+    WolfMqttAdapter* wolfAdapter = nullptr;
+    std::string protocolVersion;
+    {
+        std::lock_guard lock(mutex_);
+        if (!initialized_.load()) {
+            return Result<bool>::Failure(
+                MqttError(MqttErrorCode::NOT_INITIALIZED,
+                         "客户端未初始化"));
+        }
+        messageManager = messageManager_.get();
+        wolfAdapter = wolfAdapter_.get();
+        protocolVersion = config_.basic.version;
     }
 
-    if (!messageManager_) {
+    if (!messageManager) {
         return Result<bool>::Failure(
             MqttError(MqttErrorCode::NOT_INITIALIZED,
                      "消息管理器未初始化"));
@@ -484,10 +537,10 @@ Result<bool> EmbeddedMqttClient::publish(std::string_view topic,
     // 对于 MQTT 3.1.1，属性将被忽略
 
     // 检查协议版本
-    if (config_.basic.version != "5.0") {
+    if (protocolVersion != "5.0") {
         // MQTT 3.1.1 不支持属性，忽略 properties 参数
         LOG_DEBUG("MQTT 3.1.1 不支持属性，忽略 properties 参数");
-        auto result = messageManager_->publish(std::string(topic), std::string(payload), qos, retain);
+        auto result = messageManager->publish(std::string(topic), std::string(payload), qos, retain);
         
         // 更新消息指标
         if (config_.metrics.enableMetrics && config_.metrics.collectMessageMetrics) {
@@ -503,7 +556,7 @@ Result<bool> EmbeddedMqttClient::publish(std::string_view topic,
 
     // MQTT 5.0：如果属性为空，使用普通发布方法（通过 MessageManager）
     if (properties.isEmpty()) {
-        auto result = messageManager_->publish(std::string(topic), std::string(payload), qos, retain);
+        auto result = messageManager->publish(std::string(topic), std::string(payload), qos, retain);
         
         // 更新消息指标
         if (config_.metrics.enableMetrics && config_.metrics.collectMessageMetrics) {
@@ -519,7 +572,7 @@ Result<bool> EmbeddedMqttClient::publish(std::string_view topic,
 
     // MQTT 5.0：有属性时，直接通过 adapter 发布（绕过 MessageManager）
     // 因为 MessageManager 目前不支持属性，而 adapter 已实现属性支持
-    if (!wolfAdapter_) {
+    if (!wolfAdapter) {
         return Result<bool>::Failure(
             MqttError(MqttErrorCode::NOT_INITIALIZED,
                      "适配器未初始化"));
@@ -534,7 +587,7 @@ Result<bool> EmbeddedMqttClient::publish(std::string_view topic,
 
     // 通过 adapter 发布（带属性）
     LOG_DEBUG("使用 MQTT 5.0 属性发布消息");
-    auto result = wolfAdapter_->publish(topic, payload, properties, qos, retain);
+    auto result = wolfAdapter->publish(topic, payload, properties, qos, retain);
     
     // 更新消息指标
     if (config_.metrics.enableMetrics && config_.metrics.collectMessageMetrics) {
@@ -551,21 +604,24 @@ Result<bool> EmbeddedMqttClient::publish(std::string_view topic,
 Result<bool> EmbeddedMqttClient::subscribe(const std::string_view topic,
                                           const MessageCallback &callback,
                                           const QoS qos) {
-    std::lock_guard lock(mutex_);
-
-    if (!initialized_.load()) {
-        return Result<bool>::Failure(
-            MqttError(MqttErrorCode::NOT_INITIALIZED,
-                     "客户端未初始化"));
+    std::lock_guard operationLock(operationMutex_);
+    MqttSubscriptionManager* subscriptionManager = nullptr;
+    {
+        std::lock_guard lock(mutex_);
+        if (!initialized_.load()) {
+            return Result<bool>::Failure(
+                MqttError(MqttErrorCode::NOT_INITIALIZED,
+                         "客户端未初始化"));
+        }
+        subscriptionManager = subscriptionManager_.get();
+        if (!subscriptionManager) {
+            return Result<bool>::Failure(
+                MqttError(MqttErrorCode::NOT_INITIALIZED,
+                         "订阅管理器未初始化"));
+        }
     }
 
-    if (!subscriptionManager_) {
-        return Result<bool>::Failure(
-            MqttError(MqttErrorCode::NOT_INITIALIZED,
-                     "订阅管理器未初始化"));
-    }
-
-    auto result = subscriptionManager_->subscribe(topic, callback, qos);
+    auto result = subscriptionManager->subscribe(topic, callback, qos);
     
     // 更新订阅指标
     if (config_.metrics.enableMetrics) {
@@ -580,21 +636,24 @@ Result<bool> EmbeddedMqttClient::subscribe(const std::string_view topic,
 }
 
 Result<bool> EmbeddedMqttClient::unsubscribe(const std::string_view topic) {
-    std::lock_guard lock(mutex_);
-
-    if (!initialized_.load()) {
-        return Result<bool>::Failure(
-            MqttError(MqttErrorCode::NOT_INITIALIZED,
-                     "客户端未初始化"));
+    std::lock_guard operationLock(operationMutex_);
+    MqttSubscriptionManager* subscriptionManager = nullptr;
+    {
+        std::lock_guard lock(mutex_);
+        if (!initialized_.load()) {
+            return Result<bool>::Failure(
+                MqttError(MqttErrorCode::NOT_INITIALIZED,
+                         "客户端未初始化"));
+        }
+        subscriptionManager = subscriptionManager_.get();
+        if (!subscriptionManager) {
+            return Result<bool>::Failure(
+                MqttError(MqttErrorCode::NOT_INITIALIZED,
+                         "订阅管理器未初始化"));
+        }
     }
 
-    if (!subscriptionManager_) {
-        return Result<bool>::Failure(
-            MqttError(MqttErrorCode::NOT_INITIALIZED,
-                     "订阅管理器未初始化"));
-    }
-
-    auto result = subscriptionManager_->unsubscribe(topic);
+    auto result = subscriptionManager->unsubscribe(topic);
     
     // 更新订阅指标
     if (config_.metrics.enableMetrics && result.success) {
@@ -610,13 +669,14 @@ Result<bool> EmbeddedMqttClient::unsubscribe(const std::string_view topic) {
 }
 
 std::vector<std::string> EmbeddedMqttClient::getSubscribedTopics() const {
-    std::lock_guard lock(mutex_);
-
-    if (!subscriptionManager_) {
-        return {};
+    std::lock_guard operationLock(operationMutex_);
+    MqttSubscriptionManager* subscriptionManager = nullptr;
+    {
+        std::lock_guard lock(mutex_);
+        subscriptionManager = subscriptionManager_.get();
     }
-
-    return subscriptionManager_->getSubscribedTopics();
+    return subscriptionManager ? subscriptionManager->getSubscribedTopics()
+                               : std::vector<std::string>{};
 }
 
 void EmbeddedMqttClient::setConnectionCallback(const ConnectionCallback &callback) {
@@ -697,7 +757,29 @@ Result<bool> EmbeddedMqttClient::initializeComponents() {
 }
 
 void EmbeddedMqttClient::cleanupComponents() {
-    // 停止所有监控组件
+    // 先阻止后台线程再进入上层回调；随后按线程依赖关系逐一join。
+    if (connectionManager_) {
+        connectionManager_->setOnConnected({});
+        connectionManager_->setOnConnectionLost({});
+        connectionManager_->setOnConnectFailure({});
+    }
+    if (wolfAdapter_) {
+        wolfAdapter_->setMessageCallback({});
+    }
+    if (networkMonitor_) {
+        networkMonitor_->setOnNetworkRecovered({});
+        networkMonitor_->setOnNetworkLost({});
+        networkMonitor_->setOnQualityChanged({});
+    }
+    if (connectionMonitor_) {
+        connectionMonitor_->setOnDisconnected({});
+    }
+
+    // 这些后台线程的回调都可能访问重连管理器。先清空回调并回收线程，
+    // 再销毁重连管理器，避免清理期间出现悬空访问。
+    if (wolfAdapter_) {
+        wolfAdapter_->cleanup();
+    }
     if (networkMonitor_) {
         networkMonitor_->stop();
         networkMonitor_.reset();
@@ -712,24 +794,15 @@ void EmbeddedMqttClient::cleanupComponents() {
         heartbeatManager_->stop();
         heartbeatManager_.reset();
     }
-
     if (reconnectManager_) {
         reconnectManager_->stopReconnect();
         reconnectManager_.reset();
     }
 
-    // 消息管理器会在析构时自动停止
-
-    // 清理管理器
     subscriptionManager_.reset();
     messageManager_.reset();
     connectionManager_.reset();
-
-    // 清理适配器
-    if (wolfAdapter_) {
-        wolfAdapter_->cleanup();
-        wolfAdapter_.reset();
-    }
+    wolfAdapter_.reset();
 
     // 清理持久化和幂等去重组件
     idempotencyManager_.reset();
@@ -741,9 +814,14 @@ void EmbeddedMqttClient::setupCallbacks() {
     if (connectionManager_) {
         connectionManager_->setOnConnected([this]() {
             connected_.store(true);
-            if (connectionCallback_) {
+            ConnectionCallback callback;
+            {
+                std::lock_guard lock(mutex_);
+                callback = connectionCallback_;
+            }
+            if (callback) {
                 try {
-                    connectionCallback_(ConnectionState::CONNECTED, "连接成功");
+                    callback(ConnectionState::CONNECTED, "连接成功");
                 } catch (const std::exception& e) {
                     LOG_ERROR(fmt::format("连接回调执行失败: {}", e.what()));
                 }
@@ -752,16 +830,21 @@ void EmbeddedMqttClient::setupCallbacks() {
 
         connectionManager_->setOnConnectionLost([this](const std::string& reason) {
             connected_.store(false);
-            if (connectionCallback_) {
+            ConnectionCallback callback;
+            {
+                std::lock_guard lock(mutex_);
+                callback = connectionCallback_;
+            }
+            if (callback) {
                 try {
-                    connectionCallback_(ConnectionState::DISCONNECTED, reason);
+                    callback(ConnectionState::DISCONNECTED, reason);
                 } catch (const std::exception& e) {
                     LOG_ERROR(fmt::format("连接丢失回调执行失败: {}", e.what()));
                 }
             }
 
             // 触发重连
-            if (reconnectManager_ && connectionManager_ && config_.reconnect.maxAttempts != 0) {
+            if (reconnectManager_ && connectionManager_ && initialized_.load()) {
                 auto* connMgr = connectionManager_.get();
                 const auto reconnect = reconnectManager_->startReconnect([connMgr]() {
                     if (connMgr) {
@@ -775,10 +858,15 @@ void EmbeddedMqttClient::setupCallbacks() {
         });
 
         connectionManager_->setOnConnectFailure([this](const std::string& reason) {
-            if (errorCallback_) {
+            ErrorCallback callback;
+            {
+                std::lock_guard lock(mutex_);
+                callback = errorCallback_;
+            }
+            if (callback) {
                 try {
                     MqttError error(MqttErrorCode::CONNECTION_REFUSED, reason);
-                    errorCallback_(error);
+                    callback(error);
                 } catch (const std::exception& e) {
                     LOG_ERROR(fmt::format("错误回调执行失败: {}", e.what()));
                 }
@@ -806,15 +894,16 @@ void EmbeddedMqttClient::setupCallbacks() {
                         return;  // 忽略重复消息
                     }
 
-                    // 标记消息已处理
+                    // 成功分发后再标记，避免回调尚未执行就永久吞掉重投消息。
+                    MqttProperties properties;
+                    subscriptionManager_->dispatchMessage(topic, payload, properties);
                     if (const auto processed = idempotencyManager_->markProcessed(messageHash); !processed.success) {
-                        LOG_WARN(fmt::format("处理消息失败，已忽略: topic={}, hash={}", topic, messageHash));
-                        return;  // 处理失败，忽略消息
+                        LOG_WARN(fmt::format("记录消息处理结果失败: topic={}, hash={}", topic, messageHash));
                     }
+                    return;
                 }
 
-                // 分发消息（dispatchMessage 接受 std::string_view）
-                MqttProperties properties;  // 简化实现，暂时为空
+                MqttProperties properties;
                 subscriptionManager_->dispatchMessage(topic, payload, properties);
             }
         });
@@ -845,7 +934,7 @@ void EmbeddedMqttClient::setupCallbacks() {
     if (connectionMonitor_) {
         connectionMonitor_->setOnDisconnected([this]() {
             // 连接断开，触发重连
-            if (reconnectManager_ && connectionManager_ && config_.reconnect.maxAttempts != 0) {
+            if (reconnectManager_ && connectionManager_ && initialized_.load()) {
                 auto* connMgr = connectionManager_.get();
                 const auto reconnect = reconnectManager_->startReconnect([connMgr]() {
                     if (connMgr) {
@@ -864,7 +953,7 @@ void EmbeddedMqttClient::setupCallbacks() {
 
 // ========== 监控指标方法实现 ==========
 
-const MqttMetrics& EmbeddedMqttClient::getMetrics() const noexcept {
+MqttMetrics EmbeddedMqttClient::getMetrics() const {
     std::lock_guard lock(metricsMutex_);
     
     // 更新性能指标（实时数据）

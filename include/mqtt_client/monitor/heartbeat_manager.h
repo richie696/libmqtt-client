@@ -12,6 +12,7 @@
 #include <atomic>
 #include <thread>
 #include <mutex>
+#include <condition_variable>
 #include <ctime>
 
 namespace mqtt_client {
@@ -110,6 +111,8 @@ private:
     std::atomic<bool> running_;           ///< 是否正在运行
     
     mutable std::mutex mutex_;            ///< 互斥锁
+    std::mutex waitMutex_;                ///< 心跳等待锁
+    std::condition_variable waitCv_;      ///< 用于立即中断等待
     HeartbeatStats stats_;                ///< 统计信息
     
     std::thread heartbeatThread_;         ///< 心跳线程

@@ -5,6 +5,7 @@ project(mqtt_client VERSION 1.0.0 LANGUAGES CXX)
 set(CMAKE_CXX_STANDARD 17)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
 set(CMAKE_CXX_EXTENSIONS OFF)
+option(BUILD_SHARED_LIBS "Build mqtt_client as a shared library" ON)
 
 # 设置输出目录
 set(CMAKE_ARCHIVE_OUTPUT_DIRECTORY ${CMAKE_BINARY_DIR}/lib)
@@ -37,8 +38,14 @@ else()
     set(ARCH_32BIT TRUE)
 endif()
 
-# 检测具体架构
-if(CMAKE_SYSTEM_PROCESSOR MATCHES "^(x86_64|AMD64|amd64)$")
+# 检测具体架构。macOS Universal 构建不能把宿主机架构冒充为全部目标架构。
+if(PLATFORM_MACOS AND CMAKE_OSX_ARCHITECTURES AND
+   CMAKE_OSX_ARCHITECTURES MATCHES "arm64" AND
+   CMAKE_OSX_ARCHITECTURES MATCHES "x86_64")
+    set(ARCH_UNIVERSAL TRUE)
+    set(ARCH_NAME "universal")
+    message(STATUS "架构: macOS Universal (arm64 + x86_64)")
+elseif(CMAKE_SYSTEM_PROCESSOR MATCHES "^(x86_64|AMD64|amd64)$")
     set(ARCH_X86_64 TRUE)
     set(ARCH_NAME "x86_64")
     message(STATUS "架构: x86_64 (64位)")
@@ -69,9 +76,6 @@ endif()
 
 # Linux配置
 if(PLATFORM_LINUX)
-    # 添加Linux特定的编译选项
-    add_compile_options(-Wall -Wextra -Wpedantic)
-    
     # 链接pthread（Linux上通常需要）
     find_package(Threads REQUIRED)
     
@@ -83,8 +87,6 @@ endif()
 # Windows配置
 if(PLATFORM_WINDOWS)
     # Windows特定的编译选项
-    add_compile_options(/W4)
-    
     # 设置库文件扩展名
     set(CMAKE_SHARED_LIBRARY_PREFIX "")
     set(CMAKE_SHARED_LIBRARY_SUFFIX ".dll")
@@ -94,8 +96,6 @@ if(PLATFORM_WINDOWS)
     
     # 如果是MSVC编译器
     if(MSVC)
-        # 禁用一些MSVC警告
-        add_compile_options(/wd4251 /wd4275)
         # 设置运行时库
         set(CMAKE_MSVC_RUNTIME_LIBRARY "MultiThreaded$<$<CONFIG:Debug>:Debug>DLL")
     endif()
@@ -103,9 +103,6 @@ endif()
 
 # macOS配置
 if(PLATFORM_MACOS)
-    # macOS特定的编译选项
-    add_compile_options(-Wall -Wextra -Wpedantic)
-    
     # 设置库文件扩展名
     set(CMAKE_SHARED_LIBRARY_PREFIX "lib")
     set(CMAKE_SHARED_LIBRARY_SUFFIX ".dylib")
@@ -162,12 +159,25 @@ if(PLATFORM_MACOS)
     endif()
 endif()
 
+# 默认 macOS 架构是在平台配置阶段确定的，因此在生成宏和文件名之前
+# 再归一化一次架构信息。
+if(PLATFORM_MACOS AND CMAKE_OSX_ARCHITECTURES MATCHES "arm64" AND
+   CMAKE_OSX_ARCHITECTURES MATCHES "x86_64")
+    unset(ARCH_X86_64)
+    unset(ARCH_X86)
+    unset(ARCH_ARM64)
+    unset(ARCH_ARM32)
+    unset(ARCH_MIPS32)
+    set(ARCH_UNIVERSAL TRUE)
+    set(ARCH_NAME "universal")
+endif()
+
 # ============================================================================
 # 架构特定配置
 # ============================================================================
 
 # ARM架构配置（仅Linux，macOS不需要这些选项）
-if(PLATFORM_LINUX AND (ARCH_ARM32 OR ARCH_ARM64))
+if(PLATFORM_LINUX AND ARCH_ARM32)
     # Linux ARM特定的编译选项
     add_compile_options(-mfloat-abi=hard)  # 如果支持硬件浮点
     message(STATUS "启用Linux ARM架构优化")
@@ -188,37 +198,38 @@ endif()
 # ============================================================================
 add_definitions(
     -DPLATFORM_${CMAKE_SYSTEM_NAME}
-    -DARCH_${ARCH_NAME}
 )
 
 # 平台特定的定义
 if(PLATFORM_LINUX)
     add_definitions(-DPLATFORM_LINUX)
 elseif(PLATFORM_WINDOWS)
-    add_definitions(-DPLATFORM_WINDOWS -DWIN32 -D_WIN32)
+    add_definitions(-DPLATFORM_WINDOWS)
     if(MSVC)
         add_definitions(-D_CRT_SECURE_NO_WARNINGS)
     endif()
 elseif(PLATFORM_MACOS)
-    add_definitions(-DPLATFORM_MACOS -D__APPLE__ -D__MACH__)
+    add_definitions(-DPLATFORM_MACOS)
 endif()
 
-# 架构特定的定义
-if(ARCH_X86_64)
-    add_definitions(-DARCH_X86_64 -D__x86_64__)
+# 仅定义项目自有宏；编译器保留宏（如 __aarch64__）由每个目标架构自行提供。
+if(ARCH_UNIVERSAL)
+    add_definitions(-DARCH_UNIVERSAL)
+elseif(ARCH_X86_64)
+    add_definitions(-DARCH_X86_64)
 elseif(ARCH_X86)
-    add_definitions(-DARCH_X86 -D__i386__)
+    add_definitions(-DARCH_X86)
 elseif(ARCH_ARM64)
-    add_definitions(-DARCH_ARM64 -D__aarch64__)
+    add_definitions(-DARCH_ARM64)
 elseif(ARCH_ARM32)
-    add_definitions(-DARCH_ARM32 -D__arm__)
+    add_definitions(-DARCH_ARM32)
 elseif(ARCH_MIPS32)
-    add_definitions(-DARCH_MIPS32 -D__mips__)
+    add_definitions(-DARCH_MIPS32)
 endif()
 
 # 位宽定义
 if(ARCH_64BIT)
-    add_definitions(-DARCH_64BIT -D__LP64__)
+    add_definitions(-DARCH_64BIT)
 else()
     add_definitions(-DARCH_32BIT)
 endif()
@@ -284,10 +295,23 @@ set(SOURCES
     src/embedded_mqtt_client.cpp
 )
 
+file(GLOB_RECURSE HEADERS CONFIGURE_DEPENDS
+    "${CMAKE_CURRENT_SOURCE_DIR}/include/mqtt_client/*.h"
+)
+
 # ============================================================================
 # 创建库
 # ============================================================================
-add_library(mqtt_client SHARED ${SOURCES} ${HEADERS})
+add_library(mqtt_client ${SOURCES} ${HEADERS})
+target_compile_features(mqtt_client PUBLIC cxx_std_17)
+
+# 严格警告仅作用于本项目；不能把这些选项传播给 wolfSSL、wolfMQTT、
+# fmt 等第三方目标。
+if(MSVC)
+    target_compile_options(mqtt_client PRIVATE /W4 /wd4251 /wd4275)
+else()
+    target_compile_options(mqtt_client PRIVATE -Wall -Wextra -Wpedantic)
+endif()
 
 # 设置目标属性，包括自定义输出名称
 # 注意：在macOS上，如果设置了VERSION属性，CMake会自动在文件名后添加版本号（用点分隔）
@@ -302,7 +326,6 @@ add_library(mqtt_client SHARED ${SOURCES} ${HEADERS})
 set_target_properties(mqtt_client PROPERTIES
     VERSION ${PROJECT_VERSION}
     SOVERSION ${PROJECT_VERSION_MAJOR}
-    PUBLIC_HEADER "${HEADERS}"
     OUTPUT_NAME "mqtt_client-${FILE_NAME_SUFFIX}"
     ARCHIVE_OUTPUT_NAME "mqtt_client-${FILE_NAME_SUFFIX}"
     LIBRARY_OUTPUT_NAME "mqtt_client-${FILE_NAME_SUFFIX}"
@@ -313,7 +336,7 @@ set_target_properties(mqtt_client PROPERTIES
 # 依赖管理配置（混合方案）
 # ============================================================================
 # 混合方案：
-# - 核心依赖（autotools）：使用Git Submodule（wolfMQTT, wolfSSL）
+# - 核心依赖：使用固定版本的 Git Submodule（wolfMQTT, wolfSSL）
 # - 其他依赖（CMake/header-only）：使用FetchContent（JSON, 测试框架等）
 
 # 包含FetchContent模块（CMake 3.11+）
@@ -325,11 +348,88 @@ set(FETCHCONTENT_UPDATES_DISCONNECTED ON)  # 允许离线模式
 
 # 依赖管理选项
 option(USE_FETCHCONTENT "Use FetchContent for dependency management" ON)
-option(USE_GIT_SUBMODULE "Use Git Submodule for core dependencies (wolfMQTT)" ON)
+option(USE_GIT_SUBMODULE "Use Git Submodules for core dependencies (wolfMQTT and wolfSSL)" ON)
+option(ENABLE_WOLFMQTT "Enable wolfMQTT support" ON)
+option(BUILD_BUNDLED_WOLFMQTT
+    "Build the bundled wolfMQTT and wolfSSL submodules from source" ON)
+option(ENABLE_JSON "Enable nlohmann/json support" ON)
+option(ENABLE_YAML "Enable yaml-cpp support" ON)
+option(ENABLE_TESTING "Enable Google Test" OFF)
+option(ENABLE_INTEGRATION_TESTS
+    "Register real-broker MQTT integration tests with CTest" OFF)
+
+# 持久化格式和指标JSON输出目前都以nlohmann/json实现。
+# 明确声明为必需依赖，避免ENABLE_JSON=OFF配置成功后在编译阶段才失败。
+if(NOT ENABLE_JSON)
+    message(FATAL_ERROR "ENABLE_JSON=OFF is not supported: persistence and metrics require nlohmann/json")
+endif()
 
 # 链接系统库
 if(PLATFORM_LINUX)
     target_link_libraries(mqtt_client PRIVATE Threads::Threads)
+endif()
+
+# Prefer the pinned in-tree sources so a fresh clone does not depend on a
+# separately installed wolfMQTT/wolfSSL pair. The legacy prebuilt-library path
+# below remains available through BUILD_BUNDLED_WOLFMQTT=OFF.
+set(BUNDLED_WOLFMQTT_CONFIGURED FALSE)
+set(WOLFMQTT_SOURCE_DIR "${CMAKE_CURRENT_SOURCE_DIR}/third_party/wolfmqtt")
+set(WOLFSSL_SOURCE_DIR "${CMAKE_CURRENT_SOURCE_DIR}/third_party/wolfssl")
+
+if(ENABLE_WOLFMQTT AND USE_GIT_SUBMODULE AND BUILD_BUNDLED_WOLFMQTT)
+    if(NOT EXISTS "${WOLFMQTT_SOURCE_DIR}/CMakeLists.txt" OR
+       NOT EXISTS "${WOLFMQTT_SOURCE_DIR}/wolfmqtt/mqtt_client.h" OR
+       NOT EXISTS "${WOLFSSL_SOURCE_DIR}/CMakeLists.txt" OR
+       NOT EXISTS "${WOLFSSL_SOURCE_DIR}/wolfssl/ssl.h")
+        message(FATAL_ERROR
+            "Bundled wolfMQTT/wolfSSL sources are missing. Run: "
+            "git submodule update --init --recursive")
+    endif()
+
+    # wolfMQTT's CMake build consumes WITH_WOLFSSL_TREE and builds wolfSSL as
+    # its child project. Disable dependency examples/tests to keep this library
+    # build focused and enable every ABI-affecting feature used by our adapter.
+    set(WITH_WOLFSSL_TREE "${WOLFSSL_SOURCE_DIR}" CACHE PATH
+        "Bundled wolfSSL source tree" FORCE)
+    set(WOLFSSL_EXAMPLES "no" CACHE STRING "" FORCE)
+    set(WOLFSSL_CRYPT_TESTS "no" CACHE STRING "" FORCE)
+    # wolfMQTT exports its own target unconditionally; wolfSSL must therefore
+    # remain in an export set as its public link dependency.
+    set(WOLFSSL_INSTALL "yes" CACHE STRING "" FORCE)
+    set(WOLFSSL_IP_ALT_NAME "yes" CACHE STRING "" FORCE)
+    set(WOLFSSL_SNI "yes" CACHE STRING "" FORCE)
+    set(WOLFMQTT_EXAMPLES "no" CACHE BOOL "" FORCE)
+    set(WOLFMQTT_UNIT_TESTS "no" CACHE STRING "" FORCE)
+    set(WOLFMQTT_TLS "yes" CACHE STRING "" FORCE)
+    set(WOLFMQTT_V5 "yes" CACHE STRING "" FORCE)
+    set(WOLFMQTT_MT "yes" CACHE STRING "" FORCE)
+    # wolfMQTT 默认把生成的 options.h 写回 Submodule。强制使用构建目录，
+    # 以支持只读源码树、容器挂载和可复现的 out-of-source 构建。
+    set(WOLFMQTT_BUILD_OUT_OF_TREE "yes" CACHE STRING "" FORCE)
+
+    add_subdirectory(
+        "${WOLFMQTT_SOURCE_DIR}"
+        "${CMAKE_CURRENT_BINARY_DIR}/third_party/wolfmqtt"
+    )
+
+    target_link_libraries(mqtt_client PRIVATE wolfmqtt)
+    # WolfMqttAdapter is a public concrete class whose layout contains
+    # wolfMQTT types. Consumers must see the same feature macros and headers
+    # as the library itself or its ABI changes across the shared-library edge.
+    target_compile_definitions(mqtt_client PUBLIC
+        WOLFMQTT_ENABLED=1
+        ENABLE_MQTT_TLS=1
+        WOLFMQTT_V5=1
+        WOLFMQTT_MULTITHREAD=1
+    )
+    target_include_directories(mqtt_client SYSTEM PUBLIC
+        $<BUILD_INTERFACE:${WOLFMQTT_SOURCE_DIR}>
+        $<BUILD_INTERFACE:${CMAKE_CURRENT_BINARY_DIR}/third_party/wolfmqtt>
+        $<BUILD_INTERFACE:${WOLFSSL_SOURCE_DIR}>
+        $<BUILD_INTERFACE:${CMAKE_CURRENT_BINARY_DIR}/third_party/wolfmqtt/wolfssl>
+    )
+    set(BUNDLED_WOLFMQTT_CONFIGURED TRUE)
+    message(STATUS "wolfMQTT/wolfSSL: using pinned bundled sources")
 endif()
 
 # ============================================================================
@@ -343,17 +443,22 @@ if(USE_FETCHCONTENT)
     # ========================================================================
     option(ENABLE_WOLFMQTT "Enable wolfMQTT support" ON)
     
-    if(ENABLE_WOLFMQTT)
-        # 混合方案：wolfMQTT使用Git Submodule（推荐）
-        # 原因：wolfMQTT使用autotools，FetchContent无法自动构建
+    if(ENABLE_WOLFMQTT AND NOT BUNDLED_WOLFMQTT_CONFIGURED)
+        # 混合方案：wolfMQTT/wolfSSL 使用固定版本的 Git Submodule（推荐）
         if(USE_GIT_SUBMODULE)
             # 使用Git Submodule
-            set(WOLFMQTT_ROOT "${CMAKE_SOURCE_DIR}/third_party/wolfmqtt")
+            set(WOLFMQTT_ROOT "${CMAKE_SOURCE_DIR}/third_party/wolfmqtt" CACHE PATH
+                "wolfMQTT source or installation prefix")
             
             # wolfMQTT的头文件在wolfmqtt/目录下，不是include/wolfmqtt/
-            if(EXISTS "${WOLFMQTT_ROOT}/wolfmqtt/mqtt_client.h")
+            if(EXISTS "${WOLFMQTT_ROOT}/wolfmqtt/mqtt_client.h" OR
+               EXISTS "${WOLFMQTT_ROOT}/install/include/wolfmqtt/mqtt_client.h")
                 message(STATUS "找到wolfMQTT (Git Submodule): ${WOLFMQTT_ROOT}")
-                set(WOLFMQTT_INCLUDE_DIR "${WOLFMQTT_ROOT}")
+                if(EXISTS "${WOLFMQTT_ROOT}/install/include/wolfmqtt/mqtt_client.h")
+                    set(WOLFMQTT_INCLUDE_DIR "${WOLFMQTT_ROOT}/install/include")
+                else()
+                    set(WOLFMQTT_INCLUDE_DIR "${WOLFMQTT_ROOT}")
+                endif()
                 
                 find_library(WOLFMQTT_LIBRARY
                     NAMES wolfmqtt
@@ -403,10 +508,10 @@ if(USE_FETCHCONTENT)
                                     message(STATUS "  ✓ wolfSSL头文件目录: ${WOLFSSL_INCLUDE_DIR}")
                                     message(STATUS "  ✓ TLS支持已启用")
                                 else()
-                                    message(WARNING "  ⚠ 找到 wolfSSL 库但未找到头文件，TLS 功能将不可用")
+                                    message(FATAL_ERROR "wolfMQTT已启用TLS，但未找到wolfSSL头文件")
                                 endif()
                             else()
-                                message(WARNING "  ⚠ 未找到 wolfSSL 库，TLS 功能将不可用")
+                                message(FATAL_ERROR "wolfMQTT已启用TLS，但未找到wolfSSL库")
                             endif()
                         endif()
                     endif()
@@ -417,9 +522,9 @@ if(USE_FETCHCONTENT)
                 message(WARNING "wolfMQTT (Git Submodule) 未找到")
             endif()
         else()
-            # 备选方案：使用FetchContent下载（不推荐，仅用于测试）
+            # 备选方案：仅使用 FetchContent 下载源码（不推荐，仅用于测试）。
+            # 该分支不会替代上面的已验证 bundled 构建路径。
             message(WARNING "不推荐使用FetchContent管理wolfMQTT")
-            message(STATUS "原因: wolfMQTT使用autotools构建系统，无法自动构建")
             message(STATUS "推荐: 使用Git Submodule (USE_GIT_SUBMODULE=ON)")
             message(STATUS "")
             message(STATUS "详细说明: docs/WOLFMQTT_FETCHCONTENT_LIMITATIONS.md")
@@ -427,7 +532,7 @@ if(USE_FETCHCONTENT)
             FetchContent_Declare(
                 wolfmqtt
                 GIT_REPOSITORY https://github.com/wolfSSL/wolfMQTT.git
-                GIT_TAG        master
+                GIT_TAG        v2.1.0
             )
             
             FetchContent_GetProperties(wolfmqtt)
@@ -436,9 +541,9 @@ if(USE_FETCHCONTENT)
                 FetchContent_Populate(wolfmqtt)
                 set(WOLFMQTT_ROOT ${wolfmqtt_SOURCE_DIR})
                 set(WOLFMQTT_INCLUDE_DIR "${WOLFMQTT_ROOT}/include")
-                message(WARNING "需要手动构建wolfMQTT（使用autotools）")
+                message(WARNING "此回退路径仅下载源码；请使用 bundled Submodule 路径完成构建")
             endif()
-            # 注意：wolfMQTT使用autotools，无法使用FetchContent_MakeAvailable
+            # 注意：该回退分支只负责下载；正式构建统一走上面的 bundled Submodule 路径。
         endif()
     endif()
     
@@ -477,15 +582,13 @@ if(USE_FETCHCONTENT)
             FetchContent_Populate(nlohmann_json)
             message(STATUS "nlohmann/json 下载完成: ${nlohmann_json_SOURCE_DIR}")
             
-            # 创建接口库（header-only）
-            add_library(nlohmann_json INTERFACE)
-            target_include_directories(nlohmann_json INTERFACE 
-                ${nlohmann_json_SOURCE_DIR}/include
-            )
-            add_library(nlohmann_json::nlohmann_json ALIAS nlohmann_json)
         endif()
-        
-        target_link_libraries(mqtt_client PRIVATE nlohmann_json::nlohmann_json)
+
+        # nlohmann/json is header-only. Linking a build-local interface target
+        # leaks that target into static-library exports and makes installation
+        # fail because there is no corresponding exported dependency target.
+        target_include_directories(mqtt_client PRIVATE
+            ${nlohmann_json_SOURCE_DIR}/include)
         # 定义预处理器宏，使代码可以使用 #ifdef ENABLE_JSON
         target_compile_definitions(mqtt_client PRIVATE ENABLE_JSON=1)
         message(STATUS "nlohmann/json已配置")
@@ -495,6 +598,9 @@ if(USE_FETCHCONTENT)
     option(ENABLE_TESTING "Enable Google Test" OFF)
     if(ENABLE_TESTING)
         message(STATUS "配置Google Test (FetchContent)...")
+
+        # GoogleTest 是构建期依赖，不应进入本库的安装包。
+        set(INSTALL_GTEST OFF CACHE BOOL "" FORCE)
         
         FetchContent_Declare(
             googletest
@@ -513,15 +619,18 @@ if(USE_FETCHCONTENT)
     FetchContent_Declare(
         fmt
         GIT_REPOSITORY https://github.com/fmtlib/fmt.git
-        GIT_TAG        10.1.1
+        GIT_TAG        12.1.0
         GIT_PROGRESS   TRUE  # 显示下载进度
     )
+
+    # fmt 12 在作为子项目时默认关闭安装；静态导出仍会引用 fmt，
+    # 因此必须让它随本工程生成可消费的安装包配置。
+    set(FMT_INSTALL ON CACHE BOOL "" FORCE)
     
     message(STATUS "正在下载 fmt (这可能需要一些时间，请耐心等待)...")
     FetchContent_MakeAvailable(fmt)
     
-    # 使用 PUBLIC 链接，确保依赖 mqtt_client 的目标也能访问 fmt
-    target_link_libraries(mqtt_client PUBLIC fmt::fmt)
+    target_link_libraries(mqtt_client PRIVATE fmt::fmt)
     message(STATUS "fmt已配置")
     
     # yaml-cpp - YAML解析库（可选）
@@ -532,7 +641,7 @@ if(USE_FETCHCONTENT)
         FetchContent_Declare(
             yaml-cpp
             GIT_REPOSITORY https://github.com/jbeder/yaml-cpp.git
-            GIT_TAG        master  # 使用 master 分支，已修复 CMake 兼容性问题
+            GIT_TAG        0.8.0
             GIT_SHALLOW    TRUE
             GIT_PROGRESS   TRUE  # 显示下载进度
         )
@@ -542,14 +651,12 @@ if(USE_FETCHCONTENT)
         FetchContent_GetProperties(yaml-cpp)
         if(NOT yaml-cpp_POPULATED)
             FetchContent_Populate(yaml-cpp)
+
+            set(YAML_CPP_INSTALL ON CACHE BOOL "" FORCE)
+            set(YAML_CPP_BUILD_TESTS OFF CACHE BOOL "" FORCE)
+            set(YAML_CPP_BUILD_TOOLS OFF CACHE BOOL "" FORCE)
             
-            # 在 add_subdirectory 之前，设置策略以兼容旧版本的 cmake_minimum_required
-            # 这允许 yaml-cpp 使用较旧的 CMake 版本要求
-            if(POLICY CMP0129)
-                cmake_policy(SET CMP0129 OLD)
-            endif()
-            
-            add_subdirectory(${yaml-cpp_SOURCE_DIR} ${yaml-cpp_BINARY_DIR} EXCLUDE_FROM_ALL)
+            add_subdirectory(${yaml-cpp_SOURCE_DIR} ${yaml-cpp_BINARY_DIR})
         endif()
         
         target_link_libraries(mqtt_client PRIVATE yaml-cpp)
@@ -565,20 +672,35 @@ endif()
 # ============================================================================
 # 当USE_FETCHCONTENT=OFF时，使用传统Git Submodule方式
 if(NOT USE_FETCHCONTENT)
-    option(ENABLE_WOLFMQTT "Enable wolfMQTT support" ON)
+    find_package(fmt CONFIG REQUIRED)
+    find_package(nlohmann_json CONFIG REQUIRED)
+    target_link_libraries(mqtt_client PRIVATE fmt::fmt nlohmann_json::nlohmann_json)
+    target_compile_definitions(mqtt_client PRIVATE ENABLE_JSON=1)
+
+    if(ENABLE_YAML)
+        find_package(yaml-cpp CONFIG REQUIRED)
+        target_link_libraries(mqtt_client PRIVATE yaml-cpp)
+        target_compile_definitions(mqtt_client PRIVATE ENABLE_YAML=1)
+    endif()
     
-    if(ENABLE_WOLFMQTT)
+    if(ENABLE_WOLFMQTT AND NOT BUNDLED_WOLFMQTT_CONFIGURED)
     message(STATUS "========== wolfMQTT 配置 ==========")
     
             # wolfMQTT路径（Git Submodule）
-            set(WOLFMQTT_ROOT "${CMAKE_SOURCE_DIR}/third_party/wolfmqtt")
+            set(WOLFMQTT_ROOT "${CMAKE_SOURCE_DIR}/third_party/wolfmqtt" CACHE PATH
+                "wolfMQTT source or installation prefix")
 
             # wolfMQTT的头文件在wolfmqtt/目录下，不是include/wolfmqtt/
-            if(EXISTS "${WOLFMQTT_ROOT}/wolfmqtt/mqtt_client.h")
+            if(EXISTS "${WOLFMQTT_ROOT}/wolfmqtt/mqtt_client.h" OR
+               EXISTS "${WOLFMQTT_ROOT}/install/include/wolfmqtt/mqtt_client.h")
                 message(STATUS "找到wolfMQTT: ${WOLFMQTT_ROOT}")
 
                 # 设置wolfMQTT包含目录（头文件在wolfmqtt/目录下）
-                set(WOLFMQTT_INCLUDE_DIR "${WOLFMQTT_ROOT}")
+                if(EXISTS "${WOLFMQTT_ROOT}/install/include/wolfmqtt/mqtt_client.h")
+                    set(WOLFMQTT_INCLUDE_DIR "${WOLFMQTT_ROOT}/install/include")
+                else()
+                    set(WOLFMQTT_INCLUDE_DIR "${WOLFMQTT_ROOT}")
+                endif()
         
         # 查找或构建wolfMQTT库
         # 首先尝试查找预编译的库
@@ -662,10 +784,10 @@ if(NOT USE_FETCHCONTENT)
                             message(STATUS "  ✓ wolfSSL头文件目录: ${WOLFSSL_INCLUDE_DIR_FOUND}")
                             message(STATUS "  ✓ TLS支持已启用")
                         else()
-                            message(WARNING "  ⚠ 找到 wolfSSL 库但未找到头文件，TLS 功能将不可用")
+                            message(FATAL_ERROR "wolfMQTT已启用TLS，但未找到wolfSSL头文件")
                         endif()
                     else()
-                        message(WARNING "  ⚠ 未找到 wolfSSL 库，TLS 功能将不可用")
+                        message(FATAL_ERROR "wolfMQTT已启用TLS，但未找到wolfSSL库")
                     endif()
                 endif()
             endif()
@@ -694,9 +816,13 @@ endif()
 # ============================================================================
 message(STATUS "")
 message(STATUS "========== 依赖管理总结（混合方案）==========")
-message(STATUS "核心依赖（autotools）: Git Submodule")
+message(STATUS "核心依赖（固定版本）: Git Submodule")
 if(ENABLE_WOLFMQTT)
-    message(STATUS "  ✓ wolfMQTT: Git Submodule")
+    if(BUNDLED_WOLFMQTT_CONFIGURED)
+        message(STATUS "  ✓ wolfMQTT + wolfSSL: pinned bundled sources")
+    else()
+        message(STATUS "  ✓ wolfMQTT: external/prebuilt library")
+    endif()
 endif()
 message(STATUS "")
 message(STATUS "其他依赖（CMake/header-only）: FetchContent")
@@ -729,18 +855,33 @@ install(TARGETS mqtt_client
     LIBRARY DESTINATION lib
     ARCHIVE DESTINATION lib
     RUNTIME DESTINATION bin
-    PUBLIC_HEADER DESTINATION include/mqtt_client
 )
 
-# 安装头文件
-install(FILES 
-    # include/mqtt_client/platform.h  # 已移除
-    DESTINATION include/mqtt_client
+install(DIRECTORY include/mqtt_client
+    DESTINATION include
+    FILES_MATCHING PATTERN "*.h"
 )
 
 install(EXPORT mqtt_clientTargets
     FILE mqtt_clientTargets.cmake
     NAMESPACE mqtt_client::
+    DESTINATION lib/cmake/mqtt_client
+)
+
+include(CMakePackageConfigHelpers)
+configure_package_config_file(
+    cmake/mqtt_clientConfig.cmake.in
+    "${CMAKE_CURRENT_BINARY_DIR}/mqtt_clientConfig.cmake"
+    INSTALL_DESTINATION lib/cmake/mqtt_client
+)
+write_basic_package_version_file(
+    "${CMAKE_CURRENT_BINARY_DIR}/mqtt_clientConfigVersion.cmake"
+    VERSION ${PROJECT_VERSION}
+    COMPATIBILITY SameMajorVersion
+)
+install(FILES
+    "${CMAKE_CURRENT_BINARY_DIR}/mqtt_clientConfig.cmake"
+    "${CMAKE_CURRENT_BINARY_DIR}/mqtt_clientConfigVersion.cmake"
     DESTINATION lib/cmake/mqtt_client
 )
 
@@ -799,6 +940,7 @@ endif()
 # 测试配置
 # ============================================================================
 if(ENABLE_TESTING)
+    enable_testing()
     add_subdirectory(tests)
 endif()
 

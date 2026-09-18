@@ -18,6 +18,10 @@
 #include <functional>
 #include <mutex>
 #include <thread>
+#include <atomic>
+#include <cstdint>
+#include <queue>
+#include <vector>
 
 // wolfMQTT头文件
 #ifdef WOLFMQTT_ENABLED
@@ -234,6 +238,11 @@ private:
      */
     static int messageCallback(::MqttClient* client, ::MqttMessage* message,
                               byte msg_new, byte msg_done);
+
+    /**
+     * @brief TLS上下文配置回调
+     */
+    static int tlsCallback(::MqttClient* client);
     
     // wolfMQTT客户端实例（C结构体）
     std::unique_ptr<MqttClient> wolfClient_;
@@ -252,7 +261,7 @@ private:
 #endif
     
     // 配置
-    const MqttConfig& config_;
+    MqttConfig config_;
     
     // 回调函数
     std::function<void(std::string_view, std::string_view, QoS)> messageCallback_;
@@ -261,6 +270,16 @@ private:
     // 消息接收线程
     std::thread messageThread_;
     std::atomic<bool> messageThreadRunning_;
+
+    struct PendingMessage {
+        std::string topic;
+        std::string payload;
+        QoS qos;
+    };
+    std::queue<PendingMessage> pendingMessages_;
+    PendingMessage incomingMessage_;
+    bool receivingMessage_{false};
+    std::mutex pendingMessagesMutex_;
     
     /**
      * @brief 消息接收线程函数
@@ -273,6 +292,12 @@ private:
     
     // 线程安全
     mutable std::mutex mutex_;
+    mutable std::mutex clientMutex_;
+    std::atomic<unsigned int> pendingOperations_{0};
+    std::atomic<std::uint16_t> packetIdCounter_{1};
+
+    void dispatchPendingMessages();
+    [[nodiscard]] std::uint16_t nextPacketId() noexcept;
 };
 
 } // namespace mqtt_client
