@@ -3,9 +3,9 @@
  * @brief MQTT订阅管理器实现
  */
 
-#include "mqtt_client/subscription/subscription_manager.h"
-#include "mqtt_client/connection/connection_manager.h"
-#include "mqtt_client/adapter/wolfmqtt_adapter.h"
+#include "internal/subscription/subscription_manager.h"
+#include "internal/connection/connection_manager.h"
+#include "internal/adapter/wolfmqtt_adapter.h"
 #include "mqtt_client/logger/logger_interface.h"
 #include <fmt/core.h>
 #include <algorithm>

@@ -298,11 +298,14 @@ set(SOURCES
 file(GLOB_RECURSE HEADERS CONFIGURE_DEPENDS
     "${CMAKE_CURRENT_SOURCE_DIR}/include/mqtt_client/*.h"
 )
+file(GLOB_RECURSE INTERNAL_HEADERS CONFIGURE_DEPENDS
+    "${CMAKE_CURRENT_SOURCE_DIR}/src/internal/*.h"
+)
 
 # ============================================================================
 # 创建库
 # ============================================================================
-add_library(mqtt_client ${SOURCES} ${HEADERS})
+add_library(mqtt_client ${SOURCES} ${HEADERS} ${INTERNAL_HEADERS})
 target_compile_features(mqtt_client PUBLIC cxx_std_17)
 
 # 严格警告仅作用于本项目；不能把这些选项传播给 wolfSSL、wolfMQTT、
@@ -413,16 +416,15 @@ if(ENABLE_WOLFMQTT AND USE_GIT_SUBMODULE AND BUILD_BUNDLED_WOLFMQTT)
     )
 
     target_link_libraries(mqtt_client PRIVATE wolfmqtt)
-    # WolfMqttAdapter is a public concrete class whose layout contains
-    # wolfMQTT types. Consumers must see the same feature macros and headers
-    # as the library itself or its ABI changes across the shared-library edge.
-    target_compile_definitions(mqtt_client PUBLIC
+    # wolfMQTT/wolfSSL are implementation details; public headers no longer
+    # expose their types or feature macros.
+    target_compile_definitions(mqtt_client PRIVATE
         WOLFMQTT_ENABLED=1
         ENABLE_MQTT_TLS=1
         WOLFMQTT_V5=1
         WOLFMQTT_MULTITHREAD=1
     )
-    target_include_directories(mqtt_client SYSTEM PUBLIC
+    target_include_directories(mqtt_client SYSTEM PRIVATE
         $<BUILD_INTERFACE:${WOLFMQTT_SOURCE_DIR}>
         $<BUILD_INTERFACE:${CMAKE_CURRENT_BINARY_DIR}/third_party/wolfmqtt>
         $<BUILD_INTERFACE:${WOLFSSL_SOURCE_DIR}>
@@ -441,8 +443,6 @@ if(USE_FETCHCONTENT)
     # ========================================================================
     # wolfMQTT 依赖（核心依赖，使用Git Submodule）
     # ========================================================================
-    option(ENABLE_WOLFMQTT "Enable wolfMQTT support" ON)
-    
     if(ENABLE_WOLFMQTT AND NOT BUNDLED_WOLFMQTT_CONFIGURED)
         # 混合方案：wolfMQTT/wolfSSL 使用固定版本的 Git Submodule（推荐）
         if(USE_GIT_SUBMODULE)
@@ -522,28 +522,11 @@ if(USE_FETCHCONTENT)
                 message(WARNING "wolfMQTT (Git Submodule) 未找到")
             endif()
         else()
-            # 备选方案：仅使用 FetchContent 下载源码（不推荐，仅用于测试）。
-            # 该分支不会替代上面的已验证 bundled 构建路径。
-            message(WARNING "不推荐使用FetchContent管理wolfMQTT")
-            message(STATUS "推荐: 使用Git Submodule (USE_GIT_SUBMODULE=ON)")
-            message(STATUS "")
-            message(STATUS "详细说明: docs/WOLFMQTT_FETCHCONTENT_LIMITATIONS.md")
-            
-            FetchContent_Declare(
-                wolfmqtt
-                GIT_REPOSITORY https://github.com/wolfSSL/wolfMQTT.git
-                GIT_TAG        v2.1.0
-            )
-            
-            FetchContent_GetProperties(wolfmqtt)
-            if(NOT wolfmqtt_POPULATED)
-                message(STATUS "下载wolfMQTT源码...")
-                FetchContent_Populate(wolfmqtt)
-                set(WOLFMQTT_ROOT ${wolfmqtt_SOURCE_DIR})
-                set(WOLFMQTT_INCLUDE_DIR "${WOLFMQTT_ROOT}/include")
-                message(WARNING "此回退路径仅下载源码；请使用 bundled Submodule 路径完成构建")
-            endif()
-            # 注意：该回退分支只负责下载；正式构建统一走上面的 bundled Submodule 路径。
+            message(FATAL_ERROR
+                "USE_FETCHCONTENT=ON with wolfMQTT requires USE_GIT_SUBMODULE=ON "
+                "and BUILD_BUNDLED_WOLFMQTT=ON; the old source-only FetchContent "
+                "fallback was removed because it could configure successfully but "
+                "never produce a linkable wolfMQTT target.")
         endif()
     endif()
     
@@ -798,16 +781,19 @@ if(NOT USE_FETCHCONTENT)
         endif()
     else()
         message(WARNING "wolfMQTT源码未找到")
-        message(STATUS "请执行以下命令添加wolfMQTT:")
+        message(STATUS "请执行以下命令初始化 wolfMQTT 与 wolfSSL:")
         message(STATUS "  ./scripts/unix/init.sh")
         message(STATUS "  或")
-        message(STATUS "  git submodule add https://github.com/wolfSSL/wolfMQTT.git third_party/wolfmqtt")
         message(STATUS "  git submodule update --init --recursive")
     endif()
     
         message(STATUS "================================")
     else()
-        message(STATUS "wolfMQTT支持已禁用")
+        if(ENABLE_WOLFMQTT AND BUNDLED_WOLFMQTT_CONFIGURED)
+            message(STATUS "wolfMQTT已由bundled源码配置")
+        else()
+            message(STATUS "wolfMQTT支持已禁用")
+        endif()
     endif()
 endif()
 
@@ -844,6 +830,8 @@ target_include_directories(mqtt_client
     PUBLIC
         $<BUILD_INTERFACE:${CMAKE_CURRENT_SOURCE_DIR}/include>
         $<INSTALL_INTERFACE:include>
+    PRIVATE
+        ${CMAKE_CURRENT_SOURCE_DIR}/src
 )
 
 

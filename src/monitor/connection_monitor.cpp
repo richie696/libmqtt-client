@@ -3,8 +3,8 @@
  * @brief 连接监控器实现
  */
 
-#include "mqtt_client/monitor/connection_monitor.h"
-#include "mqtt_client/connection/connection_manager.h"
+#include "internal/monitor/connection_monitor.h"
+#include "internal/connection/connection_manager.h"
 #include "mqtt_client/logger/logger_interface.h"
 #include <chrono>
 #include <algorithm>

@@ -3,8 +3,8 @@
  * @brief 心跳管理器实现
  */
 
-#include "mqtt_client/monitor/heartbeat_manager.h"
-#include "mqtt_client/message/message_manager.h"
+#include "internal/monitor/heartbeat_manager.h"
+#include "internal/message/message_manager.h"
 #include "mqtt_client/logger/logger_interface.h"
 #include <fmt/core.h>
 #include <algorithm>

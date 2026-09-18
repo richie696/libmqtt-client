@@ -373,25 +373,21 @@ libmqtt-client/
 │   └── mqtt_client/              # 库头文件（用户需要包含的头文件）
 │       ├── embedded_mqtt_client.h    # 主客户端类
 │       ├── config/                   # 配置管理
-│       ├── connection/               # 连接管理
-│       ├── message/                  # 消息管理
-│       ├── subscription/             # 订阅管理
-│       ├── monitor/                  # 监控模块
-│       ├── reconnect/                # 重连管理
-│       ├── persistence/              # 持久化
 │       ├── logger/                   # 日志接口
+│       ├── metrics/                  # 监控指标
 │       └── core/                     # 核心类型和错误处理
 ├── src/                          # 源文件
 │   ├── embedded_mqtt_client.cpp
-│   ├── adapter/                  # wolfMQTT 适配层
 │   ├── config/
-│   ├── connection/
-│   ├── message/
-│   ├── subscription/
-│   ├── monitor/
-│   ├── reconnect/
-│   ├── persistence/
-│   └── logger/
+│   ├── logger/
+│   └── internal/                 # 仅库实现和内部测试使用的头文件
+│       ├── adapter/              # wolfMQTT 适配层
+│       ├── connection/           # 连接管理
+│       ├── message/              # 消息管理
+│       ├── subscription/         # 订阅管理
+│       ├── monitor/              # 监控模块
+│       ├── reconnect/            # 重连管理
+│       └── persistence/          # 持久化
 ├── scripts/                      # 构建脚本
 │   ├── unix/                     # Linux/macOS 脚本
 │   │   ├── init.sh               # 初始化脚本

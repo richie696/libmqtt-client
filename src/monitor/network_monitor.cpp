@@ -3,7 +3,7 @@
  * @brief 网络监控器实现
  */
 
-#include "mqtt_client/monitor/network_monitor.h"
+#include "internal/monitor/network_monitor.h"
 #include "mqtt_client/logger/logger_interface.h"
 #include <chrono>
 #include <utility>
@@ -29,10 +29,14 @@ using namespace std::chrono_literals;
 
 namespace mqtt_client {
 
-NetworkMonitor::NetworkMonitor(std::string  host, const int port, const int checkInterval)
+NetworkMonitor::NetworkMonitor(std::string host,
+                               const int port,
+                               const int checkInterval,
+                               const int networkTimeout)
     : host_(std::move(host))
     , port_(port)
     , checkInterval_(checkInterval)
+    , networkTimeout_(networkTimeout)
     , running_(false)
     , networkAvailable_(false)
     , lastQuality_(NetworkQuality::FAIR) {
@@ -158,82 +162,75 @@ bool NetworkMonitor::checkNetworkConnectivity() {
     }
 #endif
 
-    const int sock = socket(AF_INET, SOCK_STREAM, 0);
-    if (sock < 0) {
-        LOG_ERROR("创建Socket失败");
+    addrinfo hints{};
+    hints.ai_family = AF_UNSPEC;
+    hints.ai_socktype = SOCK_STREAM;
+    addrinfo* results = nullptr;
+    const std::string service = std::to_string(port_);
+    const int rc = getaddrinfo(host_.c_str(), service.c_str(), &hints, &results);
+    if (rc != 0 || results == nullptr) {
+#ifdef _WIN32
+        const char* dnsError = gai_strerrorA(rc);
+#else
+        const char* dnsError = gai_strerror(rc);
+#endif
+        LOG_ERROR(fmt::format("DNS解析失败: {} ({})", host_, dnsError));
 #ifdef _WIN32
         WSACleanup();
 #endif
         updateStats(false, -1);
         return false;
     }
-    
-    // 设置超时
-    timeval timeout{};
-    timeout.tv_sec = 3;
-    timeout.tv_usec = 0;
-    setsockopt(sock, SOL_SOCKET, SO_RCVTIMEO, &timeout, sizeof(timeout));
-    setsockopt(sock, SOL_SOCKET, SO_SNDTIMEO, &timeout, sizeof(timeout));
-    
-    // 连接测试 - 支持IP地址和域名
-    sockaddr_in server{};
-    std::memset(&server, 0, sizeof(server));
-    server.sin_family = AF_INET;
-    server.sin_port = htons(port_);
-    
-    // 尝试将host解析为IP地址
-    if (inet_pton(AF_INET, host_.c_str(), &server.sin_addr) <= 0) {
-        // 如果不是IP地址，使用getaddrinfo进行DNS解析
-        addrinfo hints{};
-        std::memset(&hints, 0, sizeof(hints));
-        hints.ai_family = AF_INET;
-        hints.ai_socktype = SOCK_STREAM;
-        
-        addrinfo* result = nullptr;
-        const int rc = getaddrinfo(host_.c_str(), nullptr, &hints, &result);
-        if (rc != 0 || result == nullptr) {
+
+    bool available = false;
+    long measuredLatency = -1;
+    for (addrinfo* address = results; address != nullptr; address = address->ai_next) {
 #ifdef _WIN32
-            const char* dnsError = gai_strerrorA(rc);
-#else
-            const char* dnsError = gai_strerror(rc);
-#endif
-            LOG_ERROR(fmt::format("DNS解析失败: {} ({})", host_, dnsError));
-            close(sock);
-#ifdef _WIN32
-            WSACleanup();
-#endif
-            updateStats(false, -1);
-            return false;
+        const SOCKET sock = socket(address->ai_family, address->ai_socktype, address->ai_protocol);
+        if (sock == INVALID_SOCKET) {
+            continue;
         }
-        
-        // 使用第一个结果
-        const auto* addr_in = reinterpret_cast<struct sockaddr_in *>(result->ai_addr);
-        server.sin_addr = addr_in->sin_addr;
-        
-        freeaddrinfo(result);
+#else
+        const int sock = socket(address->ai_family, address->ai_socktype, address->ai_protocol);
+        if (sock < 0) {
+            continue;
+        }
+#endif
+
+        timeval timeout{};
+        timeout.tv_sec = std::max(1, networkTimeout_);
+        timeout.tv_usec = 0;
+        setsockopt(sock, SOL_SOCKET, SO_RCVTIMEO,
+                   reinterpret_cast<const char*>(&timeout), sizeof(timeout));
+        setsockopt(sock, SOL_SOCKET, SO_SNDTIMEO,
+                   reinterpret_cast<const char*>(&timeout), sizeof(timeout));
+
+        const auto startTime = std::chrono::steady_clock::now();
+#ifdef _WIN32
+        const int connectResult = ::connect(
+            sock, address->ai_addr, static_cast<int>(address->ai_addrlen));
+#else
+        const int connectResult = ::connect(
+            sock, address->ai_addr, static_cast<socklen_t>(address->ai_addrlen));
+#endif
+        const auto endTime = std::chrono::steady_clock::now();
+        close(sock);
+
+        if (connectResult == 0) {
+            measuredLatency = std::chrono::duration_cast<std::chrono::milliseconds>(
+                endTime - startTime).count();
+            available = true;
+            break;
+        }
     }
 
-    // 测量延迟
-    const auto startTime = std::chrono::steady_clock::now();
-    const int result = connect(sock, reinterpret_cast<struct sockaddr *>(&server), sizeof(server));
-    const auto endTime = std::chrono::steady_clock::now();
-    
-    close(sock);
-    
+    freeaddrinfo(results);
 #ifdef _WIN32
     WSACleanup();
 #endif
-    
-    // 计算延迟并更新统计信息
-    if (result == 0) {
-        const long latency = std::chrono::duration_cast<std::chrono::milliseconds>(
-            endTime - startTime).count();
-        updateStats(true, latency);
-        return true;
-    }
-    
-    updateStats(false, -1);
-    return false;
+
+    updateStats(available, measuredLatency);
+    return available;
 }
 
 long NetworkMonitor::measureLatency() const {

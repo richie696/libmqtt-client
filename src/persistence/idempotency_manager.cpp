@@ -3,8 +3,8 @@
  * @brief 幂等去重管理器实现
  */
 
-#include "mqtt_client/persistence/idempotency_manager.h"
-#include "mqtt_client/persistence/persistence_manager.h"
+#include "internal/persistence/idempotency_manager.h"
+#include "internal/persistence/persistence_manager.h"
 #include "mqtt_client/core/types.h"
 #include "mqtt_client/core/error.h"
 #include "mqtt_client/logger/logger_interface.h"

@@ -98,6 +98,14 @@ public:
      * @return Result<std::string> JSON字符串
      */
     [[nodiscard]] static Result<std::string> saveToJson(const MqttConfig& config);
+
+    /**
+     * @brief 保存配置到YAML字符串
+     *
+     * @param config 配置对象
+     * @return Result<std::string> YAML字符串
+     */
+    [[nodiscard]] static Result<std::string> saveToYaml(const MqttConfig& config);
     
     /**
      * @brief 合并配置（用新配置覆盖旧配置）

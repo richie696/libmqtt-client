@@ -25,8 +25,12 @@ protected:
     void SetUp() override {
         // 清理测试文件
         testConfigFile_ = "/tmp/test_mqtt_config.json";
+        testYamlConfigFile_ = "/tmp/test_mqtt_config.yaml";
         if (fs::exists(testConfigFile_)) {
             fs::remove(testConfigFile_);
+        }
+        if (fs::exists(testYamlConfigFile_)) {
+            fs::remove(testYamlConfigFile_);
         }
     }
     
@@ -35,9 +39,13 @@ protected:
         if (fs::exists(testConfigFile_)) {
             fs::remove(testConfigFile_);
         }
+        if (fs::exists(testYamlConfigFile_)) {
+            fs::remove(testYamlConfigFile_);
+        }
     }
     
     std::string testConfigFile_;
+    std::string testYamlConfigFile_;
 };
 
 // 测试获取默认配置
@@ -81,6 +89,15 @@ TEST_F(ConfigManagerTest, TlsValidationAlsoAppliesToUseSsl) {
     EXPECT_TRUE(MqttConfigManager::validate(config));
 
     config.security.clientCertificatePath = "/path/to/client.pem";
+    EXPECT_FALSE(MqttConfigManager::validate(config));
+}
+
+TEST_F(ConfigManagerTest, IsValidMatchesManagerValidationForCoreRules) {
+    auto config = MqttConfigManager::getDefaultConfig();
+    config.server.host = "mqtt.example.com";
+    config.server.keepAlive = 0;
+
+    EXPECT_FALSE(config.isValid());
     EXPECT_FALSE(MqttConfigManager::validate(config));
 }
 
@@ -142,6 +159,78 @@ TEST_F(ConfigManagerTest, LoadFromFile) {
     EXPECT_EQ(loadedConfig.server.host, "load.test.com");
 }
 
+TEST_F(ConfigManagerTest, JsonRoundTripPreservesConfigurationGroups) {
+    auto config = MqttConfigManager::getDefaultConfig();
+    config.server.host = "roundtrip.example.com";
+    config.basic.cleanStart = true;
+    config.auth.token = "token-value";
+    config.auth.useTokenAuth = true;
+    config.mqtt5.receiveMaximum = 42;
+    config.mqtt5.willMessage.enabled = true;
+    config.mqtt5.willMessage.topic = "device/will";
+    config.reconnect.maxAttempts = 7;
+    config.monitoring.networkTimeout = 9;
+    config.security.enableTLS = true;
+    config.security.verifyCertificate = false;
+    config.security.tlsVersion = "1.3";
+    config.logging.maxFiles = 9;
+    config.thread.totalThreads = 12;
+    config.resource.memoryLimit = 123456;
+    config.messageQueue.maxRetry = 8;
+    config.persistence.storage.storageType = "sqlite";
+    config.performance.batch.maxBatchSize = 33;
+    config.metrics.reportEndpoint = "https://metrics.example.com";
+    config.errorHandling.enableAutoRecover = true;
+    config.qosPolicy.topicQoSMap["device/status"] = QoS::QOS_2;
+    config.topics.customTopics["status"] = "device/status";
+
+    const auto serialized = MqttConfigManager::saveToJson(config);
+    ASSERT_TRUE(serialized);
+    const auto parsed = MqttConfigManager::getInstance().loadFromJson(*serialized);
+    ASSERT_TRUE(parsed);
+
+    const auto& loaded = *parsed;
+    EXPECT_EQ(loaded.server.host, config.server.host);
+    EXPECT_TRUE(loaded.basic.cleanStart);
+    EXPECT_EQ(loaded.auth.token, config.auth.token);
+    EXPECT_TRUE(loaded.auth.useTokenAuth);
+    EXPECT_EQ(loaded.mqtt5.receiveMaximum, 42);
+    EXPECT_TRUE(loaded.mqtt5.willMessage.enabled);
+    EXPECT_EQ(loaded.reconnect.maxAttempts, 7);
+    EXPECT_EQ(loaded.monitoring.networkTimeout, 9);
+    EXPECT_EQ(loaded.security.tlsVersion, "1.3");
+    EXPECT_EQ(loaded.logging.maxFiles, 9);
+    EXPECT_EQ(loaded.thread.totalThreads, 12);
+    EXPECT_EQ(loaded.resource.memoryLimit, 123456U);
+    EXPECT_EQ(loaded.messageQueue.maxRetry, 8);
+    EXPECT_EQ(loaded.persistence.storage.storageType, "sqlite");
+    EXPECT_EQ(loaded.performance.batch.maxBatchSize, 33U);
+    EXPECT_EQ(loaded.metrics.reportEndpoint, "https://metrics.example.com");
+    EXPECT_TRUE(loaded.errorHandling.enableAutoRecover);
+    EXPECT_EQ(loaded.qosPolicy.topicQoSMap.at("device/status"), QoS::QOS_2);
+    EXPECT_EQ(loaded.topics.customTopics.at("status"), "device/status");
+}
+
+TEST_F(ConfigManagerTest, YamlFileRoundTripUpdatesCurrentConfig) {
+    auto config = MqttConfigManager::getDefaultConfig();
+    config.server.host = "yaml.example.com";
+    config.monitoring.networkTimeout = 11;
+    config.mqtt5.receiveMaximum = 42;
+    config.auth.token = "yaml-token";
+    config.metrics.reportEndpoint = "https://metrics.example.com";
+
+    ASSERT_TRUE(MqttConfigManager::getInstance().saveToFile(config, testYamlConfigFile_));
+    const auto result = MqttConfigManager::getInstance().loadFromFile(testYamlConfigFile_);
+    ASSERT_TRUE(result) << result.error.message;
+    EXPECT_EQ(result->server.host, "yaml.example.com");
+    EXPECT_EQ(result->monitoring.networkTimeout, 11);
+    EXPECT_EQ(result->mqtt5.receiveMaximum, 42);
+    EXPECT_EQ(result->auth.token, "yaml-token");
+    EXPECT_EQ(result->metrics.reportEndpoint, "https://metrics.example.com");
+    EXPECT_EQ(MqttConfigManager::getInstance().getCurrentConfig().server.host,
+              "yaml.example.com");
+}
+
 // 测试配置合并
 TEST_F(ConfigManagerTest, MergeConfig) {
     auto& manager = MqttConfigManager::getInstance();
@@ -149,6 +238,9 @@ TEST_F(ConfigManagerTest, MergeConfig) {
     auto baseConfig = manager.getDefaultConfig();
     baseConfig.basic.clientId = "base_client";
     baseConfig.server.host = "base.com";
+    baseConfig.basic.cleanStart = true;
+    baseConfig.server.useSSL = true;
+    baseConfig.logging.level = LogLevel::DEBUG;
     
     MqttConfig overrideConfig;
     overrideConfig.basic.clientId = "override_client";
@@ -158,6 +250,9 @@ TEST_F(ConfigManagerTest, MergeConfig) {
     
     EXPECT_EQ(merged.basic.clientId, "override_client");
     EXPECT_EQ(merged.server.host, "base.com");  // 应该保持base的值
+    EXPECT_TRUE(merged.basic.cleanStart);
+    EXPECT_TRUE(merged.server.useSSL);
+    EXPECT_EQ(merged.logging.level, LogLevel::DEBUG);
 }
 
 // 测试配置更新回调

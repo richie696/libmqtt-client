@@ -243,6 +243,25 @@ if(GTest_FOUND OR TARGET gtest)
     add_executable(test_mqtt311_tcp_tls
         ${CMAKE_CURRENT_SOURCE_DIR}/integration/test_mqtt311_tcp_tls.cpp
     )
+
+    add_executable(test_lifecycle
+        ${CMAKE_CURRENT_SOURCE_DIR}/integration/test_lifecycle.cpp
+    )
+
+    target_link_libraries(test_lifecycle
+        PRIVATE
+            mqtt_client
+    )
+
+    target_include_directories(test_lifecycle
+        PRIVATE
+            ${CMAKE_SOURCE_DIR}/include
+    )
+
+    set_target_properties(test_lifecycle PROPERTIES
+        CXX_STANDARD 17
+        CXX_STANDARD_REQUIRED ON
+    )
     
     target_link_libraries(test_mqtt311_tcp_tls
         PRIVATE
@@ -254,6 +273,20 @@ if(GTest_FOUND OR TARGET gtest)
         PRIVATE
             ${CMAKE_SOURCE_DIR}/include
     )
+
+    # 单元测试会直接覆盖内部管理器；内部头文件只对测试和库实现可见，
+    # 不进入安装包的公共 include 树。
+    foreach(_mqtt_internal_test IN ITEMS
+            test_connection
+            test_message
+            test_subscription
+            test_monitor
+            test_reconnect)
+        target_include_directories(${_mqtt_internal_test}
+            PRIVATE
+                ${CMAKE_SOURCE_DIR}/src
+        )
+    endforeach()
     
     # 确保使用 C++17 标准（CTAD 需要）
     set_target_properties(test_mqtt311_tcp_tls PROPERTIES
@@ -276,6 +309,17 @@ if(GTest_FOUND OR TARGET gtest)
             PROPERTIES
                 LABELS "integration;mqtt"
                 TIMEOUT 120
+                RUN_SERIAL TRUE
+        )
+        add_test(
+            NAME integration_mqtt_lifecycle
+            COMMAND test_lifecycle
+        )
+        set_tests_properties(
+            integration_mqtt_lifecycle
+            PROPERTIES
+                LABELS "integration;mqtt"
+                TIMEOUT 60
                 RUN_SERIAL TRUE
         )
     endif()

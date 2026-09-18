@@ -292,6 +292,11 @@ private:
      * @brief 设置组件回调
      */
     void setupCallbacks();
+
+    /**
+     * @brief 统一处理连接成功后的高层恢复动作
+     */
+    void handleConnectionEstablished();
     
     // 子组件
     std::unique_ptr<WolfMqttAdapter> wolfAdapter_;
@@ -311,6 +316,9 @@ private:
     MqttConfig config_;
     std::atomic<bool> initialized_;
     std::atomic<bool> connected_;
+    // 主动断开和显式重连期间禁止连接丢失回调启动后台重连。
+    std::atomic<bool> intentionalDisconnect_;
+    std::atomic<bool> suppressReconnect_;
     
     // 监控指标
     mutable MqttMetrics metrics_;

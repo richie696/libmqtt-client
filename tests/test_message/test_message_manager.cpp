@@ -4,11 +4,11 @@
  */
 
 #include <gtest/gtest.h>
-#include "mqtt_client/message/message_manager.h"
-#include "mqtt_client/connection/connection_manager.h"
+#include "internal/message/message_manager.h"
+#include "internal/connection/connection_manager.h"
 #include "mqtt_client/config/config.h"
 #include "mqtt_client/config/config_manager.h"
-#include "mqtt_client/adapter/wolfmqtt_adapter.h"
+#include "internal/adapter/wolfmqtt_adapter.h"
 #include <memory>
 #include <thread>
 #include <chrono>

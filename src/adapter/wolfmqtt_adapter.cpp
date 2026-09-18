@@ -3,7 +3,7 @@
  * @brief wolfMQTT适配器实现
  */
 
-#include "mqtt_client/adapter/wolfmqtt_adapter.h"
+#include "internal/adapter/wolfmqtt_adapter.h"
 #include "mqtt_client/logger/logger_interface.h"
 #include "mqtt_client/core/error.h"
 #include <algorithm>
@@ -402,7 +402,7 @@ Result<bool> WolfMqttAdapter::connect() {
 #endif
 }
 
-Result<bool> WolfMqttAdapter::disconnect() {
+Result<bool> WolfMqttAdapter::disconnect(const bool force) {
     const bool wasConnected = connected_.exchange(false);
     messageThreadRunning_.store(false);
 
@@ -416,7 +416,7 @@ Result<bool> WolfMqttAdapter::disconnect() {
     {
         std::lock_guard clientLock(clientMutex_);
         if (wolfClient_) {
-            if (wasConnected && networkContext_.socketFd >= 0) {
+            if (!force && wasConnected && networkContext_.socketFd >= 0) {
                 const int rc = MqttClient_Disconnect(wolfClient_.get());
                 protocolDisconnectSucceeded = rc == MQTT_CODE_SUCCESS;
                 if (!protocolDisconnectSucceeded) {

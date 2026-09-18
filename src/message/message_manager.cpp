@@ -3,12 +3,13 @@
  * @brief MQTT消息管理器实现
  */
 
-#include "mqtt_client/message/message_manager.h"
-#include "mqtt_client/connection/connection_manager.h"
-#include "mqtt_client/adapter/wolfmqtt_adapter.h"
+#include "internal/message/message_manager.h"
+#include "internal/connection/connection_manager.h"
+#include "internal/adapter/wolfmqtt_adapter.h"
 #include "mqtt_client/logger/logger_interface.h"
 #include <fmt/core.h>
 #include <chrono>
+#include <utility>
 
 using namespace std::chrono_literals;
 
@@ -47,10 +48,41 @@ Result<bool> MqttMessageManager::publish(const std::string& topic,
                                         QoS qos,
                                         bool retained,
                                         int priority) {
+    QueuedMessage msg;
+    msg.topic = topic;
+    msg.payload = payload;
+    msg.qos = qos;
+    msg.retained = retained;
+    msg.priority = priority;
+    msg.timestamp = std::time(nullptr);
+    return publishMessage(std::move(msg));
+}
+
+Result<bool> MqttMessageManager::publishWithProperties(
+    const std::string& topic,
+    const std::string& payload,
+    const MqttProperties& properties,
+    const QoS qos,
+    const bool retained,
+    const int priority) {
+    QueuedMessage msg;
+    msg.topic = topic;
+    msg.payload = payload;
+    msg.properties = properties;
+    msg.qos = qos;
+    msg.retained = retained;
+    msg.priority = priority;
+    msg.timestamp = std::time(nullptr);
+    return publishMessage(std::move(msg));
+}
+
+Result<bool> MqttMessageManager::publishMessage(QueuedMessage msg) {
     // 确保线程已启动
     startThread();
-    
+
     // 验证消息
+    const auto& topic = msg.topic;
+    const auto& payload = msg.payload;
     if (topic.empty() || topic.length() > 65535) {
         return Result<bool>::Failure(
             MqttError(MqttErrorCode::INVALID_TOPIC,
@@ -67,20 +99,11 @@ Result<bool> MqttMessageManager::publish(const std::string& topic,
                      fmt::format("消息过大: {} 字节", payload.length())));
     }
     
-    // 创建消息对象
-    QueuedMessage msg;
-    msg.topic = topic;
-    msg.payload = payload;
-    msg.qos = qos;
-    msg.retained = retained;
-    msg.priority = priority;
-    msg.timestamp = std::time(nullptr);
-    
     // 检查连接状态
     if (!connectionManager_.isConnected()) {
         // 如果启用持久化，将消息加入队列
         if (config_.persistence.buffer.enableSendPersistence) {
-            return queueMessage(topic, payload, qos, retained, priority);
+            return enqueueMessage(std::move(msg));
         }
         
         return Result<bool>::Failure(
@@ -111,7 +134,7 @@ Result<bool> MqttMessageManager::publishSync(const std::string& topic,
                                             const std::string& payload,
                                             const QoS qos,
                                             const bool retained,
-                                            [[maybe_unused]] int timeoutMs) {
+                                            [[maybe_unused]] const int timeoutMs) {
     if (topic.empty() || topic.length() > 65535) {
         return Result<bool>::Failure(
             MqttError(MqttErrorCode::INVALID_TOPIC, "主题无效: 空或过长"));
@@ -238,17 +261,31 @@ Result<bool> MqttMessageManager::enqueueMessage(QueuedMessage msg) {
 }
 
 size_t MqttMessageManager::getQueueSize() const {
-    std::lock_guard lock(queueMutex_);
-    return queue_.size();
+    size_t size = 0;
+    {
+        std::lock_guard lock(queueMutex_);
+        size += queue_.size();
+    }
+    {
+        std::lock_guard lock(batchMutex_);
+        size += batchQueue_.size();
+    }
+    return size;
 }
 
 void MqttMessageManager::clearQueue() {
-    std::lock_guard lock(queueMutex_);
-    
-    // priority_queue没有clear方法，需要逐个pop
-    while (!queue_.empty()) {
-        queue_.pop();
+    {
+        std::lock_guard lock(queueMutex_);
+        // priority_queue没有clear方法，需要逐个pop
+        while (!queue_.empty()) {
+            queue_.pop();
+        }
     }
+    {
+        std::lock_guard lock(batchMutex_);
+        batchQueue_.clear();
+    }
+    queueCV_.notify_all();
 }
 
 void MqttMessageManager::flush() {
@@ -317,7 +354,9 @@ Result<bool> MqttMessageManager::sendMessage(const QueuedMessage& msg) {
         }
         
         // 通过适配器发送消息
-        auto result = adapter->publish(msg.topic, msg.payload, msg.qos, msg.retained);
+        auto result = msg.properties.isEmpty()
+            ? adapter->publish(msg.topic, msg.payload, msg.qos, msg.retained)
+            : adapter->publish(msg.topic, msg.payload, msg.properties, msg.qos, msg.retained);
         
         if (result) {
             updateStats(true);

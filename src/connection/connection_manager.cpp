@@ -3,8 +3,8 @@
  * @brief MQTT连接管理器实现
  */
 
-#include "mqtt_client/connection/connection_manager.h"
-#include "mqtt_client/adapter/wolfmqtt_adapter.h"
+#include "internal/connection/connection_manager.h"
+#include "internal/adapter/wolfmqtt_adapter.h"
 #include "mqtt_client/logger/logger_interface.h"
 #include <chrono>
 
@@ -113,7 +113,7 @@ Result<bool> MqttConnectionManager::connect() {
     return Result<bool>::Success(true);
 }
 
-Result<bool> MqttConnectionManager::disconnect() {
+Result<bool> MqttConnectionManager::disconnect(const bool force) {
     WolfMqttAdapter* adapter = nullptr;
     {
         std::lock_guard lock(mutex_);
@@ -126,7 +126,7 @@ Result<bool> MqttConnectionManager::disconnect() {
 
     Result<bool> result = Result<bool>::Success(true);
     if (adapter) {
-        result = adapter->disconnect();
+        result = adapter->disconnect(force);
         if (!result) {
             LOG_WARN("断开连接时出错: " + result.error.message);
         }

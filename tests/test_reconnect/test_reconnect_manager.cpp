@@ -4,7 +4,7 @@
  */
 
 #include <gtest/gtest.h>
-#include "mqtt_client/reconnect/reconnect_manager.h"
+#include "internal/reconnect/reconnect_manager.h"
 #include "mqtt_client/config/config.h"
 #include <thread>
 #include <chrono>

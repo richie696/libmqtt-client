@@ -4,7 +4,7 @@
  */
 
 #include <gtest/gtest.h>
-#include "mqtt_client/monitor/network_monitor.h"
+#include "internal/monitor/network_monitor.h"
 #include <thread>
 #include <chrono>
 

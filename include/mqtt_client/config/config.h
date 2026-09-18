@@ -43,8 +43,8 @@ struct MqttConfig {
         // 备用服务器
         struct BackupServer {
             std::string host;
-            int port;
-            bool useSSL;
+            int port = 1883;
+            bool useSSL = false;
         };
         std::vector<BackupServer> backupServers;  ///< 备用服务器列表
     } server;
@@ -337,11 +337,36 @@ struct MqttConfig {
         if (basic.version != "3.1.1" && basic.version != "5.0") {
             return false;
         }
+        if (basic.clientIdPrefix.empty()) {
+            return false;
+        }
         if (server.host.empty()) {
             return false;
         }
         if (server.port <= 0 || server.port > 65535) {
             return false;
+        }
+        if (server.connectTimeout <= 0 || server.keepAlive <= 0) {
+            return false;
+        }
+        for (const auto& backup : server.backupServers) {
+            if (backup.host.empty() || backup.port <= 0 || backup.port > 65535) {
+                return false;
+            }
+        }
+        if (server.useSSL || security.enableTLS) {
+            if (security.tlsVersion != "1.2" && security.tlsVersion != "1.3") {
+                return false;
+            }
+            if (security.verifyCertificate && security.caCertificatePath.empty()) {
+                return false;
+            }
+            if (security.verifyDepth <= 0) {
+                return false;
+            }
+            if (security.clientCertificatePath.empty() != security.clientPrivateKeyPath.empty()) {
+                return false;
+            }
         }
         return true;
     }

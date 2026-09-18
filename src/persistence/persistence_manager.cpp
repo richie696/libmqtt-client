@@ -3,8 +3,8 @@
  * @brief 持久化管理器实现
  */
 
-#include "mqtt_client/persistence/persistence_manager.h"
-#include "mqtt_client/persistence/storage_engine.h"
+#include "internal/persistence/persistence_manager.h"
+#include "internal/persistence/storage_engine.h"
 #include "mqtt_client/core/error.h"
 #include "mqtt_client/logger/logger_interface.h"
 #include <fmt/core.h>

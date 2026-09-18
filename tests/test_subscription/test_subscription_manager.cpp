@@ -4,11 +4,11 @@
  */
 
 #include <gtest/gtest.h>
-#include "mqtt_client/subscription/subscription_manager.h"
-#include "mqtt_client/connection/connection_manager.h"
+#include "internal/subscription/subscription_manager.h"
+#include "internal/connection/connection_manager.h"
 #include "mqtt_client/config/config.h"
 #include "mqtt_client/config/config_manager.h"
-#include "mqtt_client/adapter/wolfmqtt_adapter.h"
+#include "internal/adapter/wolfmqtt_adapter.h"
 #include <memory>
 
 using namespace mqtt_client;

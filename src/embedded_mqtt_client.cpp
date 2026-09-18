@@ -4,17 +4,17 @@
  */
 
 #include "mqtt_client/embedded_mqtt_client.h"
-#include "mqtt_client/adapter/wolfmqtt_adapter.h"
-#include "mqtt_client/connection/connection_manager.h"
-#include "mqtt_client/message/message_manager.h"
-#include "mqtt_client/subscription/subscription_manager.h"
-#include "mqtt_client/monitor/network_monitor.h"
-#include "mqtt_client/monitor/connection_monitor.h"
-#include "mqtt_client/monitor/heartbeat_manager.h"
-#include "mqtt_client/reconnect/reconnect_manager.h"
+#include "internal/adapter/wolfmqtt_adapter.h"
+#include "internal/connection/connection_manager.h"
+#include "internal/message/message_manager.h"
+#include "internal/subscription/subscription_manager.h"
+#include "internal/monitor/network_monitor.h"
+#include "internal/monitor/connection_monitor.h"
+#include "internal/monitor/heartbeat_manager.h"
+#include "internal/reconnect/reconnect_manager.h"
 #include "mqtt_client/config/config_manager.h"
-#include "mqtt_client/persistence/persistence_manager.h"
-#include "mqtt_client/persistence/idempotency_manager.h"
+#include "internal/persistence/persistence_manager.h"
+#include "internal/persistence/idempotency_manager.h"
 #include "mqtt_client/logger/logger_interface.h"
 #include <fmt/core.h>
 // #include "mqtt_client/platform.h"  // 已移除，不再需要
@@ -166,6 +166,8 @@ namespace {
 EmbeddedMqttClient::EmbeddedMqttClient()
     : initialized_(false)
     , connected_(false)
+    , intentionalDisconnect_(false)
+    , suppressReconnect_(false)
     , metrics_()
 {
     // 首次创建客户端时输出库初始化信息（仅输出一次）
@@ -177,6 +179,8 @@ EmbeddedMqttClient::EmbeddedMqttClient(const MqttConfig& config)
     : config_(config)
     , initialized_(false)
     , connected_(false)
+    , intentionalDisconnect_(false)
+    , suppressReconnect_(false)
     , metrics_()
 {
     // 立即初始化
@@ -317,6 +321,8 @@ MqttConfig EmbeddedMqttClient::getConfig() const {
 
 Result<bool> EmbeddedMqttClient::connect() {
     std::lock_guard operationLock(operationMutex_);
+    intentionalDisconnect_.store(false);
+    suppressReconnect_.store(false);
     MqttConnectionManager* connectionManager = nullptr;
     {
         std::lock_guard lock(mutex_);
@@ -347,25 +353,6 @@ Result<bool> EmbeddedMqttClient::connect() {
     if (result) {
         connected_.store(true);
 
-        // 启动监控组件
-        if (networkMonitor_ && config_.monitoring.enableNetworkMonitor) {
-            networkMonitor_->start();
-        }
-        if (connectionMonitor_ && config_.monitoring.enableConnectionMonitor) {
-            connectionMonitor_->start();
-        }
-        if (heartbeatManager_ && config_.monitoring.enableHeartbeat) {
-            heartbeatManager_->start();
-        }
-
-        // 恢复订阅
-        if (subscriptionManager_) {
-            if (const auto resubscribeResult = subscriptionManager_->resubscribeAll(); !resubscribeResult.success) {
-                LOG_ERROR(resubscribeResult.error.message);
-            }
-        }
-
-        // 消息管理器会在需要时自动处理队列
     } else {
         // 连接失败，更新错误指标
         if (config_.metrics.enableMetrics) {
@@ -376,8 +363,10 @@ Result<bool> EmbeddedMqttClient::connect() {
     return result;
 }
 
-Result<bool> EmbeddedMqttClient::disconnect(bool /* force */) {
+Result<bool> EmbeddedMqttClient::disconnect(const bool force) {
     std::lock_guard operationLock(operationMutex_);
+    intentionalDisconnect_.store(true);
+    suppressReconnect_.store(true);
     const bool wasConnected = connected_.load();
 
     // 停止监控组件
@@ -402,7 +391,7 @@ Result<bool> EmbeddedMqttClient::disconnect(bool /* force */) {
 
     // 通过连接管理器断开
     if (connectionManager_) {
-        auto result = connectionManager_->disconnect();
+        auto result = connectionManager_->disconnect(force);
         connected_.store(false);
         if (result) {
             // 更新连接指标
@@ -434,6 +423,8 @@ Result<bool> EmbeddedMqttClient::disconnect(bool /* force */) {
 
 Result<bool> EmbeddedMqttClient::reconnect() {
     std::lock_guard operationLock(operationMutex_);
+    intentionalDisconnect_.store(false);
+    suppressReconnect_.store(true);
     MqttConnectionManager* connectionManager = nullptr;
     {
         std::lock_guard lock(mutex_);
@@ -446,7 +437,9 @@ Result<bool> EmbeddedMqttClient::reconnect() {
     }
 
     if (connectionManager) {
-        return connectionManager->reconnect();
+        auto result = connectionManager->reconnect();
+        suppressReconnect_.store(false);
+        return result;
     }
 
     return Result<bool>::Failure(
@@ -570,24 +563,14 @@ Result<bool> EmbeddedMqttClient::publish(std::string_view topic,
         return result;
     }
 
-    // MQTT 5.0：有属性时，直接通过 adapter 发布（绕过 MessageManager）
-    // 因为 MessageManager 目前不支持属性，而 adapter 已实现属性支持
+    // 带属性的消息也通过消息管理器，保持离线持久化、批处理和重试语义一致。
     if (!wolfAdapter) {
         return Result<bool>::Failure(
             MqttError(MqttErrorCode::NOT_INITIALIZED,
-                     "适配器未初始化"));
+                      "适配器未初始化"));
     }
-
-    // 检查连接状态
-    if (!connected_.load()) {
-        return Result<bool>::Failure(
-            MqttError(MqttErrorCode::NOT_CONNECTED,
-                     "未连接，无法发布消息"));
-    }
-
-    // 通过 adapter 发布（带属性）
-    LOG_DEBUG("使用 MQTT 5.0 属性发布消息");
-    auto result = wolfAdapter->publish(topic, payload, properties, qos, retain);
+    auto result = messageManager->publishWithProperties(
+        std::string(topic), std::string(payload), properties, qos, retain);
     
     // 更新消息指标
     if (config_.metrics.enableMetrics && config_.metrics.collectMessageMetrics) {
@@ -713,7 +696,8 @@ Result<bool> EmbeddedMqttClient::initializeComponents() {
         networkMonitor_ = std::make_unique<NetworkMonitor>(
             config_.server.host,
             config_.server.port,
-            config_.monitoring.networkCheckInterval
+            config_.monitoring.networkCheckInterval,
+            config_.monitoring.networkTimeout
         );
     }
 
@@ -814,6 +798,7 @@ void EmbeddedMqttClient::setupCallbacks() {
     if (connectionManager_) {
         connectionManager_->setOnConnected([this]() {
             connected_.store(true);
+            handleConnectionEstablished();
             ConnectionCallback callback;
             {
                 std::lock_guard lock(mutex_);
@@ -844,7 +829,9 @@ void EmbeddedMqttClient::setupCallbacks() {
             }
 
             // 触发重连
-            if (reconnectManager_ && connectionManager_ && initialized_.load()) {
+            if (!intentionalDisconnect_.load() &&
+                !suppressReconnect_.load() &&
+                reconnectManager_ && connectionManager_ && initialized_.load()) {
                 auto* connMgr = connectionManager_.get();
                 const auto reconnect = reconnectManager_->startReconnect([connMgr]() {
                     if (connMgr) {
@@ -913,7 +900,9 @@ void EmbeddedMqttClient::setupCallbacks() {
     if (networkMonitor_) {
         networkMonitor_->setOnNetworkRecovered([this]() {
             // 网络恢复，触发快速重连
-            if (reconnectManager_ && connectionManager_ && !connected_.load()) {
+            if (!intentionalDisconnect_.load() &&
+                !suppressReconnect_.load() &&
+                reconnectManager_ && connectionManager_ && !connected_.load()) {
                 reconnectManager_->resetAttempts();
                 auto* connMgr = connectionManager_.get();
                 const auto reconnect = reconnectManager_->startReconnect([connMgr]() {
@@ -934,7 +923,9 @@ void EmbeddedMqttClient::setupCallbacks() {
     if (connectionMonitor_) {
         connectionMonitor_->setOnDisconnected([this]() {
             // 连接断开，触发重连
-            if (reconnectManager_ && connectionManager_ && initialized_.load()) {
+            if (!intentionalDisconnect_.load() &&
+                !suppressReconnect_.load() &&
+                reconnectManager_ && connectionManager_ && initialized_.load()) {
                 auto* connMgr = connectionManager_.get();
                 const auto reconnect = reconnectManager_->startReconnect([connMgr]() {
                     if (connMgr) {
@@ -948,6 +939,26 @@ void EmbeddedMqttClient::setupCallbacks() {
                 }
             }
         });
+    }
+}
+
+void EmbeddedMqttClient::handleConnectionEstablished() {
+    std::lock_guard operationLock(operationMutex_);
+
+    if (networkMonitor_ && config_.monitoring.enableNetworkMonitor) {
+        networkMonitor_->start();
+    }
+    if (connectionMonitor_ && config_.monitoring.enableConnectionMonitor) {
+        connectionMonitor_->start();
+    }
+    if (heartbeatManager_ && config_.monitoring.enableHeartbeat) {
+        heartbeatManager_->start();
+    }
+
+    if (subscriptionManager_) {
+        if (const auto result = subscriptionManager_->resubscribeAll(); !result.success) {
+            LOG_ERROR(result.error.message);
+        }
     }
 }
 
